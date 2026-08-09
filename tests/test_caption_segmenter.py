@@ -20,6 +20,69 @@ def config(**changes):
 
 
 class CaptionSegmenterTests(unittest.TestCase):
+    def test_tiny_trailing_caption_merges_backward_with_soft_duration_limit(self):
+        items = words(("Something", 0, 4.9), ("brief", 4.9, 5.4))
+        captions = segment_transcript(transcript(items), CaptionConfig())
+        self.assertEqual(len(captions), 1)
+        self.assertEqual(captions[0].text, "Something brief")
+        self.assertEqual((captions[0].start, captions[0].end), (0.0, 5.4))
+
+    def test_tiny_leading_caption_merges_forward(self):
+        items = words(("Hi.", 0, 0.4), ("Everyone", 0.4, 4.4))
+        captions = segment_transcript(transcript(items), CaptionConfig())
+        self.assertEqual(len(captions), 1)
+        self.assertEqual(captions[0].text, "Hi. Everyone")
+        self.assertEqual((captions[0].start, captions[0].end), (0.0, 4.4))
+
+    def test_unsafe_tiny_caption_is_retained_across_long_gaps(self):
+        items = words(
+            ("Before.", 0, 4.9),
+            ("短い。", 6.0, 6.4),
+            ("After", 7.5, 11.5),
+        )
+        captions = segment_transcript(transcript(items), CaptionConfig())
+        self.assertEqual(len(captions), 3)
+        self.assertEqual(captions[1].text, "短い。")
+
+    def test_cjk_grammatical_tail_does_not_become_orphan(self):
+        cases = [
+            ("ほら超立派な綺麗なピーマンが収穫でき", "たので", 0.46),
+            ("昨日熱中症になりましてマジでやば", "かった", 0.60),
+        ]
+        for prefix, tail, tail_duration in cases:
+            with self.subTest(tail=tail):
+                items = words(
+                    (prefix, 0.0, 5.0),
+                    (tail, 5.0, 5.0 + tail_duration),
+                )
+                captions = segment_transcript(transcript(items), CaptionConfig())
+                self.assertEqual(len(captions), 1)
+                self.assertEqual(
+                    captions[0].text.replace("\n", ""), prefix + tail
+                )
+                self.assertEqual(
+                    (captions[0].start, captions[0].end),
+                    (0.0, 5.0 + tail_duration),
+                )
+
+    def test_single_token_longer_than_max_duration_is_preserved(self):
+        items = words(("よし", 1.0, 9.7))
+        captions = segment_transcript(transcript(items), CaptionConfig())
+        self.assertEqual(len(captions), 1)
+        self.assertEqual(captions[0].text, "よし")
+        self.assertEqual((captions[0].start, captions[0].end), (1.0, 9.7))
+
+    def test_soft_merge_keeps_two_line_hard_limit(self):
+        items = words(
+            ("あ" * 40, 0, 2.4),
+            ("い" * 40, 2.4, 4.9),
+            ("たので", 4.9, 5.35),
+        )
+        captions = segment_transcript(transcript(items), CaptionConfig())
+        self.assertEqual(len(captions), 1)
+        self.assertLessEqual(len(captions[0].text.splitlines()), 2)
+        self.assertTrue(all(len(line) <= 47 for line in captions[0].text.splitlines()))
+
     def test_english_and_vietnamese_keep_natural_spacing(self):
         english = words(
             ("Hello", 0, 0.3), ("everyone", 0.3, 0.7), (".", 0.7, 0.8)

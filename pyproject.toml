@@ -21,6 +21,7 @@ dev = ["pytest>=8"]
 [project.scripts]
 silence-cutter = "silence_cutter.__main__:main"
 caption-engine = "caption_engine.__main__:main"
+timeline-engine = "timeline_engine.__main__:main"
 
 [tool.setuptools.packages.find]
-include = ["caption_engine*", "silence_cutter*"]
+include = ["caption_engine*", "silence_cutter*", "timeline_engine*"]

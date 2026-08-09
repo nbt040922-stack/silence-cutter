@@ -54,9 +54,9 @@ class CaptionPipelineTests(unittest.TestCase):
             {"duration": 10.0, "has_audio": True},
             {"duration": 9.9, "has_audio": True},
         ]
-        word = WordTimestamp("Xin", 0.0, 1.0, 0.98)
+        word = WordTimestamp("Xin", 0.0, 6.0, 0.98)
         transcribe_audio.return_value = TranscriptionResult(
-            [TranscriptSegment(0.0, 1.0, "Xin", [word])],
+            [TranscriptSegment(0.0, 6.0, "Xin", [word])],
             "vi",
             0.97,
             9.9,
@@ -89,6 +89,7 @@ class CaptionPipelineTests(unittest.TestCase):
         self.assertEqual(report["language_probability"], 0.97)
         self.assertEqual(report["word_count"], 1)
         self.assertEqual(report["caption_count"], 1)
+        self.assertEqual(report["long_single_token_caption_count"], 1)
         self.assertEqual(report["actual_device"], "cuda")
         self.assertEqual(report["actual_compute_type"], "float16")
         self.assertEqual(report["model_initialization_time"], 1.2)

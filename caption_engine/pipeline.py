@@ -63,6 +63,11 @@ def generate_captions(
     total_processing_time = time.perf_counter() - started
     realtime_factor = total_processing_time / audio_duration if audio_duration else 0.0
     x_realtime = audio_duration / total_processing_time if total_processing_time else 0.0
+    long_single_token_caption_count = sum(
+        len(caption.words) == 1
+        and caption.end - caption.start > config.max_caption_duration
+        for caption in captions
+    )
     report = {
         "model": config.model_size,
         "language": transcription.language,
@@ -84,6 +89,7 @@ def generate_captions(
         "x_realtime": x_realtime,
         "word_count": sum(len(segment.words) for segment in transcription.segments),
         "caption_count": len(captions),
+        "long_single_token_caption_count": long_single_token_caption_count,
         "requested_device": transcription.requested_device,
         "requested_compute_type": transcription.requested_compute_type,
         "actual_device": transcription.actual_device,
@@ -117,6 +123,7 @@ def generate_captions(
             "x_realtime",
             "word_count",
             "caption_count",
+            "long_single_token_caption_count",
             "requested_device",
             "requested_compute_type",
             "actual_device",

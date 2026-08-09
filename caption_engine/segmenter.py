@@ -7,6 +7,10 @@ _SENTENCE_END = (".", "?", "!", "。", "？", "！")
 _SOFT_END = (",", ";", ":", "、", "，", "；", "：")
 _CLOSE_PUNCTUATION = set(",.;:!?%)]}、。，；：！？）］｝」』】》〉")
 _OPEN_PUNCTUATION = set("([{（［｛「『【《〈")
+_CJK_PHRASE_ENDINGS = (
+    "たので", "かった", "ので", "けれど", "けど", "ながら", "なら",
+    "から", "ため", "ものの", "のに", "ても", "では", "には", "とは",
+)
 
 
 def _is_cjk_char(character: str) -> bool:
@@ -61,6 +65,9 @@ def _join_words(words: list[WordTimestamp]) -> str:
     )
 
 
+join_words = _join_words
+
+
 def balance_lines(
     text: str,
     max_chars: int = 42,
@@ -102,10 +109,26 @@ def balance_lines(
     return text
 
 
-def _caption(words: list[WordTimestamp], config: CaptionConfig) -> CaptionSegment:
+def _soft_line_limit(config: CaptionConfig) -> int:
+    return config.max_chars_per_line + max(
+        2, min(6, (config.max_chars_per_line + 9) // 10)
+    )
+
+
+def _soft_duration_overrun(config: CaptionConfig) -> float:
+    return min(
+        config.min_caption_duration,
+        max(0.25, config.max_caption_duration * 0.15),
+    )
+
+
+def _caption(
+    words: list[WordTimestamp], config: CaptionConfig, *, soft_limits: bool = False
+) -> CaptionSegment:
+    line_limit = _soft_line_limit(config) if soft_limits else config.max_chars_per_line
     text = balance_lines(
         _join_words(words),
-        config.max_chars_per_line,
+        line_limit,
         config.max_lines,
         [word.text for word in words],
     )
@@ -117,29 +140,44 @@ def _caption(words: list[WordTimestamp], config: CaptionConfig) -> CaptionSegmen
     )
 
 
-def _fits(words: list[WordTimestamp], config: CaptionConfig) -> bool:
+def _fits(
+    words: list[WordTimestamp], config: CaptionConfig, *, soft_limits: bool = False
+) -> bool:
     text = _join_words(words)
-    if not _has_cjk(text) and len(words) > config.max_words_per_caption:
+    extra_words = 1 if soft_limits else 0
+    if (
+        not _has_cjk(text)
+        and len(words) > config.max_words_per_caption + extra_words
+    ):
         return False
-    if words[-1].end - words[0].start > config.max_caption_duration:
+    longest_token = max(word.end - word.start for word in words)
+    duration_limit = max(config.max_caption_duration, longest_token)
+    if soft_limits and len(words) > 1:
+        duration_limit += _soft_duration_overrun(config)
+    if words[-1].end - words[0].start > duration_limit:
         return False
+    line_limit = _soft_line_limit(config) if soft_limits else config.max_chars_per_line
     lines = balance_lines(
         text,
-        config.max_chars_per_line,
+        line_limit,
         config.max_lines,
         [word.text for word in words],
     ).splitlines()
     return len(lines) <= config.max_lines and all(
-        len(line) <= config.max_chars_per_line for line in lines
+        len(line) <= line_limit for line in lines
     )
 
 
 def _can_merge(
-    left: CaptionSegment, right: CaptionSegment, config: CaptionConfig
+    left: CaptionSegment,
+    right: CaptionSegment,
+    config: CaptionConfig,
+    *,
+    soft_limits: bool = False,
 ) -> bool:
     gap = right.words[0].start - left.words[-1].end
     return gap <= config.max_gap_between_words and _fits(
-        left.words + right.words, config
+        left.words + right.words, config, soft_limits=soft_limits
     )
 
 
@@ -155,23 +193,74 @@ def _is_tiny(caption: CaptionSegment, config: CaptionConfig) -> bool:
 def _merge_tiny(
     captions: list[CaptionSegment], config: CaptionConfig
 ) -> list[CaptionSegment]:
-    merged: list[CaptionSegment] = []
-    for index, caption in enumerate(captions):
-        if _is_tiny(caption, config) and merged and _can_merge(
-            merged[-1], caption, config
-        ):
-            merged[-1] = _caption(merged[-1].words + caption.words, config)
-        elif (
-            _is_tiny(caption, config)
-            and index + 1 < len(captions)
-            and _can_merge(caption, captions[index + 1], config)
-        ):
-            captions[index + 1] = _caption(
-                caption.words + captions[index + 1].words, config
+    result = list(captions)
+    index = 0
+    while index < len(result):
+        tiny = result[index]
+        if not _is_tiny(tiny, config):
+            index += 1
+            continue
+
+        candidates: list[tuple[float, int, CaptionSegment]] = []
+        if index > 0:
+            candidate = _tiny_merge_candidate(
+                result[index - 1], tiny, config, tiny_on_right=True
             )
-        else:
-            merged.append(caption)
-    return merged
+            if candidate:
+                candidates.append((candidate[0], index - 1, candidate[1]))
+        if index + 1 < len(result):
+            candidate = _tiny_merge_candidate(
+                tiny, result[index + 1], config, tiny_on_right=False
+            )
+            if candidate:
+                candidates.append((candidate[0], index, candidate[1]))
+        if not candidates:
+            index += 1
+            continue
+
+        _, merge_index, merged = min(candidates, key=lambda item: item[0])
+        result[merge_index : merge_index + 2] = [merged]
+        index = max(0, merge_index - 1)
+    return result
+
+
+def _tiny_merge_candidate(
+    left: CaptionSegment,
+    right: CaptionSegment,
+    config: CaptionConfig,
+    *,
+    tiny_on_right: bool,
+) -> tuple[float, CaptionSegment] | None:
+    if not _can_merge(left, right, config, soft_limits=True):
+        return None
+    words = left.words + right.words
+    merged = _caption(words, config, soft_limits=True)
+    gap = max(0.0, right.words[0].start - left.words[-1].end)
+    duration_overrun = max(
+        0.0, merged.end - merged.start - config.max_caption_duration
+    )
+    line_overrun = sum(
+        max(0, len(line) - config.max_chars_per_line)
+        for line in merged.text.splitlines()
+    )
+    boundary_penalty = 2.0 if left.text.rstrip().endswith(_SENTENCE_END) else 0.0
+    natural_tail_bonus = 0.0
+    if tiny_on_right:
+        tail = right.text.replace("\n", "")
+        if tail.endswith(_CJK_PHRASE_ENDINGS):
+            natural_tail_bonus = 1.0
+        elif tail.endswith(_SENTENCE_END):
+            natural_tail_bonus = 0.5
+    direction_penalty = 0.05 if not tiny_on_right else 0.0
+    score = (
+        boundary_penalty
+        + gap
+        + duration_overrun
+        + line_overrun / max(1, config.max_chars_per_line)
+        + direction_penalty
+        - natural_tail_bonus
+    )
+    return score, merged
 
 
 def _merge_overlaps(
