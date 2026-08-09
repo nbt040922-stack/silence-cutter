@@ -7,10 +7,14 @@ name = "silence-cutter"
 version = "0.1.0"
 description = "Remove long non-speech regions from video using Silero VAD."
 requires-python = ">=3.10"
-dependencies = ["numpy>=1.26", "silero-vad>=6,<7"]
+dependencies = ["faster-whisper>=1.2,<2", "numpy>=1.26", "silero-vad>=6,<7"]
+
+[project.optional-dependencies]
+dev = ["pytest>=8"]
 
 [project.scripts]
 silence-cutter = "silence_cutter.__main__:main"
+caption-engine = "caption_engine.__main__:main"
 
 [tool.setuptools.packages.find]
-include = ["silence_cutter*"]
+include = ["caption_engine*", "silence_cutter*"]
