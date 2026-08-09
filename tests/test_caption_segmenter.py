@@ -20,6 +20,74 @@ def config(**changes):
 
 
 class CaptionSegmenterTests(unittest.TestCase):
+    def test_english_and_vietnamese_keep_natural_spacing(self):
+        english = words(
+            ("Hello", 0, 0.3), ("everyone", 0.3, 0.7), (".", 0.7, 0.8)
+        )
+        vietnamese = words(
+            ("Xin", 0, 0.3),
+            ("chào", 0.3, 0.7),
+            ("bạn", 0.7, 1.0),
+            ("!", 1.0, 1.1),
+        )
+        self.assertEqual(
+            segment_transcript(transcript(english), config())[0].text,
+            "Hello everyone.",
+        )
+        self.assertEqual(
+            segment_transcript(transcript(vietnamese), config())[0].text,
+            "Xin chào bạn!",
+        )
+
+    def test_japanese_ignores_latin_word_limit_and_preserves_timestamps(self):
+        tokens = [
+            "今回", "は", "ですね", "今", "から", "夜", "ご",
+            "飯", "を", "作", "って", "い", "こう",
+        ]
+        items = [
+            WordTimestamp(text, index * 0.3, (index + 1) * 0.3)
+            for index, text in enumerate(tokens)
+        ]
+        captions = segment_transcript(
+            transcript(items), config(max_words_per_caption=2, max_caption_duration=10)
+        )
+        self.assertEqual(len(captions), 1)
+        self.assertEqual(captions[0].text, "".join(tokens))
+        self.assertEqual((captions[0].start, captions[0].end), (0.0, 3.9))
+
+    def test_chinese_joining_and_punctuation(self):
+        items = words(
+            ("今天", 0, 0.3),
+            ("天气", 0.3, 0.6),
+            ("很好", 0.6, 0.9),
+            ("。", 0.9, 1.0),
+        )
+        self.assertEqual(
+            segment_transcript(transcript(items), config())[0].text,
+            "今天天气很好。",
+        )
+
+    def test_korean_preserves_whisper_space_boundaries(self):
+        items = [
+            WordTimestamp("안녕하세요", 0, 0.5, space_before=False),
+            WordTimestamp("여러분", 0.5, 1.0, space_before=True),
+            WordTimestamp(".", 1.0, 1.1, space_before=False),
+        ]
+        self.assertEqual(
+            segment_transcript(transcript(items), config())[0].text,
+            "안녕하세요 여러분.",
+        )
+
+    def test_cjk_two_line_balancing_uses_token_boundaries(self):
+        tokens = ["今回", "は", "ですね", "今", "から", "夜ご飯"]
+        text = "".join(tokens)
+        lines = balance_lines(
+            text, max_chars=6, max_lines=2, tokens=tokens
+        ).splitlines()
+        self.assertEqual(len(lines), 2)
+        self.assertEqual("".join(lines), text)
+        self.assertTrue(all(len(line) <= 6 for line in lines))
+
     def test_punctuation_break(self):
         items = words(("Welcome.", 0, 1), ("Continue", 1.1, 2.1))
         captions = segment_transcript(transcript(items), config())

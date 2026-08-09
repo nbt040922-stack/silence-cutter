@@ -23,6 +23,7 @@ class WordTimestamp:
     start: float
     end: float
     probability: float | None = None
+    space_before: bool | None = None
 
     def __post_init__(self) -> None:
         self.text = normalize_text(self.text)
@@ -74,3 +75,15 @@ class TranscriptionResult:
     language: str | None
     language_probability: float | None
     audio_duration: float
+    requested_device: str | None = None
+    requested_compute_type: str | None = None
+    actual_device: str | None = None
+    actual_compute_type: str | None = None
+    batch_enabled: bool = False
+    batch_size: int = 1
+    cpu_fallback_used: bool = False
+    model_initialization_time: float = 0.0
+    model_initialization_cached: bool = False
+    transcription_inference_time: float = 0.0
+    manual_clip_timestamps_used: bool = False
+    cuda_runtime: dict[str, object] | None = None

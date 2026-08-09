@@ -7,7 +7,13 @@ name = "silence-cutter"
 version = "0.1.0"
 description = "Remove long non-speech regions from video using Silero VAD."
 requires-python = ">=3.10"
-dependencies = ["faster-whisper>=1.2,<2", "numpy>=1.26", "silero-vad>=6,<7"]
+dependencies = [
+    "faster-whisper>=1.2,<2",
+    "numpy>=1.26",
+    "silero-vad>=6,<7",
+    "nvidia-cublas-cu12>=12,<13; platform_system == 'Windows'",
+    "nvidia-cudnn-cu12>=9,<10; platform_system == 'Windows'",
+]
 
 [project.optional-dependencies]
 dev = ["pytest>=8"]

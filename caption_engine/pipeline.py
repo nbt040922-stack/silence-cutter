@@ -30,16 +30,16 @@ def generate_captions(
     if not media["has_audio"]:
         raise MediaProcessError("input media contains no audio stream")
 
+    extraction_started = time.perf_counter()
     with tempfile.TemporaryDirectory(prefix="caption-engine-") as directory:
         audio_path = extract_analysis_audio(
             source, Path(directory) / "analysis.wav", 16_000
         )
         audio_duration = float(probe_media(audio_path)["duration"])
-        transcription_started = time.perf_counter()
+        audio_extraction_time = time.perf_counter() - extraction_started
         transcription = transcribe_audio(
             audio_path, config, audio_duration=audio_duration
         )
-        transcription_time = time.perf_counter() - transcription_started
 
     caption_started = time.perf_counter()
     captions = segment_transcript(transcription.segments, config)
@@ -57,7 +57,9 @@ def generate_captions(
     )
     if source in (srt_path, json_path) or srt_path == json_path:
         raise ValueError("caption outputs must differ from input and each other")
+    output_started = time.perf_counter()
     write_srt(srt_path, captions)
+    output_write_time = time.perf_counter() - output_started
     total_processing_time = time.perf_counter() - started
     realtime_factor = total_processing_time / audio_duration if audio_duration else 0.0
     x_realtime = audio_duration / total_processing_time if total_processing_time else 0.0
@@ -67,13 +69,30 @@ def generate_captions(
         "language_probability": transcription.language_probability,
         "audio_duration": audio_duration,
         "processing_time": total_processing_time,
-        "transcription_time": transcription_time,
+        "audio_extraction_time": audio_extraction_time,
+        "model_initialization_time": transcription.model_initialization_time,
+        "model_initialization_cached": transcription.model_initialization_cached,
+        "transcription_inference_time": transcription.transcription_inference_time,
+        "transcription_time": (
+            transcription.model_initialization_time
+            + transcription.transcription_inference_time
+        ),
         "caption_processing_time": caption_processing_time,
+        "output_write_time": output_write_time,
         "total_processing_time": total_processing_time,
         "realtime_factor": realtime_factor,
         "x_realtime": x_realtime,
         "word_count": sum(len(segment.words) for segment in transcription.segments),
         "caption_count": len(captions),
+        "requested_device": transcription.requested_device,
+        "requested_compute_type": transcription.requested_compute_type,
+        "actual_device": transcription.actual_device,
+        "actual_compute_type": transcription.actual_compute_type,
+        "batch_enabled": transcription.batch_enabled,
+        "batch_size": transcription.batch_size,
+        "cpu_fallback_used": transcription.cpu_fallback_used,
+        "manual_clip_timestamps_used": transcription.manual_clip_timestamps_used,
+        "cuda_runtime": transcription.cuda_runtime,
         "config": config.to_dict(),
         "segments": [segment.to_dict() for segment in transcription.segments],
         "captions": [caption.to_dict() for caption in captions],
@@ -86,12 +105,26 @@ def generate_captions(
             "language",
             "language_probability",
             "audio_duration",
+            "audio_extraction_time",
+            "model_initialization_time",
+            "model_initialization_cached",
+            "transcription_inference_time",
             "transcription_time",
             "caption_processing_time",
+            "output_write_time",
             "total_processing_time",
             "realtime_factor",
             "x_realtime",
             "word_count",
             "caption_count",
+            "requested_device",
+            "requested_compute_type",
+            "actual_device",
+            "actual_compute_type",
+            "batch_enabled",
+            "batch_size",
+            "cpu_fallback_used",
+            "manual_clip_timestamps_used",
+            "cuda_runtime",
         )},
     }
