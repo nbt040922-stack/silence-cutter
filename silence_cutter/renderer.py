@@ -8,10 +8,11 @@ from .audio import MediaProcessError, _require_executable, _run
 
 
 def _filter_graph(keep: list[dict[str, float]]) -> str:
-    segments = keep or [{"start": 0.0, "end": 0.0}]
+    if not keep:
+        raise ValueError("keep timeline must not be empty")
     filters: list[str] = []
     inputs: list[str] = []
-    for index, segment in enumerate(segments):
+    for index, segment in enumerate(keep):
         start, end = segment["start"], segment["end"]
         filters.extend(
             [
@@ -21,7 +22,7 @@ def _filter_graph(keep: list[dict[str, float]]) -> str:
         )
         inputs.append(f"[v{index}][a{index}]")
     filters.append(
-        f"{''.join(inputs)}concat=n={len(segments)}:v=1:a=1[vout][aout]"
+        f"{''.join(inputs)}concat=n={len(keep)}:v=1:a=1[vout][aout]"
     )
     return ";".join(filters)
 

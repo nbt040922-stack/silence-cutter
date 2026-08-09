@@ -61,7 +61,7 @@ def extract_analysis_audio(input_path: Path, wav_path: Path, sample_rate: int) -
     return wav_path
 
 
-def probe_media(input_path: Path) -> dict[str, float]:
+def probe_media(input_path: Path) -> dict[str, float | bool]:
     ffprobe = _require_executable("ffprobe")
     completed = _run(
         [
@@ -69,7 +69,7 @@ def probe_media(input_path: Path) -> dict[str, float]:
             "-v",
             "error",
             "-show_entries",
-            "format=duration",
+            "format=duration:stream=codec_type",
             "-of",
             "json",
             str(input_path),
@@ -77,9 +77,15 @@ def probe_media(input_path: Path) -> dict[str, float]:
         "media probe",
     )
     try:
-        duration = float(json.loads(completed.stdout)["format"]["duration"])
+        probe = json.loads(completed.stdout)
+        duration = float(probe["format"]["duration"])
     except (KeyError, TypeError, ValueError, json.JSONDecodeError) as exc:
         raise MediaProcessError("media probe returned no valid duration") from exc
     if duration <= 0:
         raise MediaProcessError("input media duration must be positive")
-    return {"duration": duration}
+    return {
+        "duration": duration,
+        "has_audio": any(
+            stream.get("codec_type") == "audio" for stream in probe.get("streams", [])
+        ),
+    }
