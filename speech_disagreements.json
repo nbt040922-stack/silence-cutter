@@ -1,0 +1,218 @@
+[
+  {
+    "start": 0.0,
+    "end": 0.3,
+    "source": "sensevoice_only",
+    "confidence": null,
+    "duration": 0.3,
+    "detector": "sensevoice_only"
+  },
+  {
+    "start": 2.5,
+    "end": 2.6,
+    "source": "sensevoice_only",
+    "confidence": null,
+    "duration": 0.10000000000000009,
+    "detector": "sensevoice_only"
+  },
+  {
+    "start": 17.6,
+    "end": 17.8,
+    "source": "sensevoice_only",
+    "confidence": null,
+    "duration": 0.1999999999999993,
+    "detector": "sensevoice_only"
+  },
+  {
+    "start": 25.4,
+    "end": 25.5,
+    "source": "sensevoice_only",
+    "confidence": null,
+    "duration": 0.10000000000000142,
+    "detector": "sensevoice_only"
+  },
+  {
+    "start": 26.28,
+    "end": 26.5,
+    "source": "silero_only",
+    "confidence": null,
+    "duration": 0.21999999999999886,
+    "detector": "silero_only"
+  },
+  {
+    "start": 30.99,
+    "end": 31.4,
+    "source": "sensevoice_only",
+    "confidence": null,
+    "duration": 0.41000000000000014,
+    "detector": "sensevoice_only"
+  },
+  {
+    "start": 31.7,
+    "end": 33.3,
+    "source": "sensevoice_only",
+    "confidence": null,
+    "duration": 1.5999999999999979,
+    "detector": "sensevoice_only"
+  },
+  {
+    "start": 47.8,
+    "end": 47.9,
+    "source": "sensevoice_only",
+    "confidence": null,
+    "duration": 0.10000000000000142,
+    "detector": "sensevoice_only"
+  },
+  {
+    "start": 49.1,
+    "end": 49.2,
+    "source": "sensevoice_only",
+    "confidence": null,
+    "duration": 0.10000000000000142,
+    "detector": "sensevoice_only"
+  },
+  {
+    "start": 52.1,
+    "end": 52.3,
+    "source": "sensevoice_only",
+    "confidence": null,
+    "duration": 0.19999999999999574,
+    "detector": "sensevoice_only"
+  },
+  {
+    "start": 78.6,
+    "end": 78.8,
+    "source": "sensevoice_only",
+    "confidence": null,
+    "duration": 0.20000000000000284,
+    "detector": "sensevoice_only"
+  },
+  {
+    "start": 83.9,
+    "end": 84.1,
+    "source": "sensevoice_only",
+    "confidence": null,
+    "duration": 0.19999999999998863,
+    "detector": "sensevoice_only"
+  },
+  {
+    "start": 84.24,
+    "end": 84.5,
+    "source": "sensevoice_only",
+    "confidence": null,
+    "duration": 0.2600000000000051,
+    "detector": "sensevoice_only"
+  },
+  {
+    "start": 85.6,
+    "end": 85.87,
+    "source": "sensevoice_only",
+    "confidence": null,
+    "duration": 0.27000000000001023,
+    "detector": "sensevoice_only"
+  },
+  {
+    "start": 86.09,
+    "end": 86.4,
+    "source": "sensevoice_only",
+    "confidence": null,
+    "duration": 0.3100000000000023,
+    "detector": "sensevoice_only"
+  },
+  {
+    "start": 87.8,
+    "end": 87.9,
+    "source": "sensevoice_only",
+    "confidence": null,
+    "duration": 0.10000000000000853,
+    "detector": "sensevoice_only"
+  },
+  {
+    "start": 105.7,
+    "end": 105.8,
+    "source": "sensevoice_only",
+    "confidence": null,
+    "duration": 0.09999999999999432,
+    "detector": "sensevoice_only"
+  },
+  {
+    "start": 111.85,
+    "end": 112.1,
+    "source": "silero_only",
+    "confidence": null,
+    "duration": 0.25,
+    "detector": "silero_only"
+  },
+  {
+    "start": 113.74,
+    "end": 114.1,
+    "source": "sensevoice_only",
+    "confidence": null,
+    "duration": 0.35999999999999943,
+    "detector": "sensevoice_only"
+  },
+  {
+    "start": 116.64,
+    "end": 116.8,
+    "source": "silero_only",
+    "confidence": null,
+    "duration": 0.1599999999999966,
+    "detector": "silero_only"
+  },
+  {
+    "start": 136.38,
+    "end": 136.4,
+    "source": "silero_only",
+    "confidence": null,
+    "duration": 0.020000000000010232,
+    "detector": "silero_only"
+  },
+  {
+    "start": 136.42,
+    "end": 136.7,
+    "source": "sensevoice_only",
+    "confidence": null,
+    "duration": 0.28000000000000114,
+    "detector": "sensevoice_only"
+  },
+  {
+    "start": 144.8,
+    "end": 144.9,
+    "source": "sensevoice_only",
+    "confidence": null,
+    "duration": 0.09999999999999432,
+    "detector": "sensevoice_only"
+  },
+  {
+    "start": 178.2,
+    "end": 178.3,
+    "source": "sensevoice_only",
+    "confidence": null,
+    "duration": 0.10000000000002274,
+    "detector": "sensevoice_only"
+  },
+  {
+    "start": 221.2,
+    "end": 221.3,
+    "source": "sensevoice_only",
+    "confidence": null,
+    "duration": 0.10000000000002274,
+    "detector": "sensevoice_only"
+  },
+  {
+    "start": 263.0,
+    "end": 263.2,
+    "source": "sensevoice_only",
+    "confidence": null,
+    "duration": 0.19999999999998863,
+    "detector": "sensevoice_only"
+  },
+  {
+    "start": 299.98,
+    "end": 300.0,
+    "source": "silero_only",
+    "confidence": null,
+    "duration": 0.01999999999998181,
+    "detector": "silero_only"
+  }
+]

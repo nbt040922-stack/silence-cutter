@@ -1,0 +1,267 @@
+{
+  "audio_duration": 300.001995,
+  "config": {
+    "sample_rate": 16000,
+    "vad_threshold": 0.5,
+    "speech_pad_before": 0.25,
+    "speech_pad_after": 0.3,
+    "merge_gap": 0.35,
+    "min_silence_duration": 1.0,
+    "min_keep_duration": 0.5,
+    "sensevoice_model": "iic/SenseVoiceSmall",
+    "sensevoice_device": "cuda:0",
+    "sensevoice_language": "ja"
+  },
+  "silero_intervals": [
+    {
+      "start": 0.3,
+      "end": 2.5,
+      "source": "silero",
+      "confidence": null
+    },
+    {
+      "start": 2.6,
+      "end": 17.6,
+      "source": "silero",
+      "confidence": null
+    },
+    {
+      "start": 17.8,
+      "end": 25.4,
+      "source": "silero",
+      "confidence": null
+    },
+    {
+      "start": 25.5,
+      "end": 26.5,
+      "source": "silero",
+      "confidence": null
+    },
+    {
+      "start": 31.4,
+      "end": 31.7,
+      "source": "silero",
+      "confidence": null
+    },
+    {
+      "start": 33.3,
+      "end": 47.8,
+      "source": "silero",
+      "confidence": null
+    },
+    {
+      "start": 47.9,
+      "end": 49.1,
+      "source": "silero",
+      "confidence": null
+    },
+    {
+      "start": 49.2,
+      "end": 52.1,
+      "source": "silero",
+      "confidence": null
+    },
+    {
+      "start": 52.3,
+      "end": 78.6,
+      "source": "silero",
+      "confidence": null
+    },
+    {
+      "start": 78.8,
+      "end": 83.9,
+      "source": "silero",
+      "confidence": null
+    },
+    {
+      "start": 84.5,
+      "end": 85.6,
+      "source": "silero",
+      "confidence": null
+    },
+    {
+      "start": 86.4,
+      "end": 87.8,
+      "source": "silero",
+      "confidence": null
+    },
+    {
+      "start": 87.9,
+      "end": 105.7,
+      "source": "silero",
+      "confidence": null
+    },
+    {
+      "start": 105.8,
+      "end": 112.1,
+      "source": "silero",
+      "confidence": null
+    },
+    {
+      "start": 114.1,
+      "end": 136.4,
+      "source": "silero",
+      "confidence": null
+    },
+    {
+      "start": 136.7,
+      "end": 144.8,
+      "source": "silero",
+      "confidence": null
+    },
+    {
+      "start": 144.9,
+      "end": 178.2,
+      "source": "silero",
+      "confidence": null
+    },
+    {
+      "start": 178.3,
+      "end": 221.2,
+      "source": "silero",
+      "confidence": null
+    },
+    {
+      "start": 221.3,
+      "end": 263.0,
+      "source": "silero",
+      "confidence": null
+    },
+    {
+      "start": 263.2,
+      "end": 300.0,
+      "source": "silero",
+      "confidence": null
+    }
+  ],
+  "sensevoice_intervals": [
+    {
+      "start": 0.0,
+      "end": 26.28,
+      "source": "sensevoice",
+      "confidence": null
+    },
+    {
+      "start": 30.99,
+      "end": 84.1,
+      "source": "sensevoice",
+      "confidence": null
+    },
+    {
+      "start": 84.24,
+      "end": 85.87,
+      "source": "sensevoice",
+      "confidence": null
+    },
+    {
+      "start": 86.09,
+      "end": 111.85,
+      "source": "sensevoice",
+      "confidence": null
+    },
+    {
+      "start": 113.74,
+      "end": 116.64,
+      "source": "sensevoice",
+      "confidence": null
+    },
+    {
+      "start": 116.8,
+      "end": 136.38,
+      "source": "sensevoice",
+      "confidence": null
+    },
+    {
+      "start": 136.42,
+      "end": 299.98,
+      "source": "sensevoice",
+      "confidence": null
+    }
+  ],
+  "union_intervals": [
+    {
+      "start": 0.0,
+      "end": 26.5,
+      "source": "union",
+      "confidence": null
+    },
+    {
+      "start": 30.99,
+      "end": 84.1,
+      "source": "union",
+      "confidence": null
+    },
+    {
+      "start": 84.24,
+      "end": 85.87,
+      "source": "union",
+      "confidence": null
+    },
+    {
+      "start": 86.09,
+      "end": 112.1,
+      "source": "union",
+      "confidence": null
+    },
+    {
+      "start": 113.74,
+      "end": 136.4,
+      "source": "union",
+      "confidence": null
+    },
+    {
+      "start": 136.42,
+      "end": 300.0,
+      "source": "union",
+      "confidence": null
+    }
+  ],
+  "final_keep_intervals": [
+    {
+      "start": 0.0,
+      "end": 26.8
+    },
+    {
+      "start": 30.74,
+      "end": 112.39999999999999
+    },
+    {
+      "start": 113.49,
+      "end": 300.001995
+    }
+  ],
+  "final_cut_intervals": [
+    {
+      "start": 26.8,
+      "end": 30.74
+    },
+    {
+      "start": 112.39999999999999,
+      "end": 113.49
+    }
+  ],
+  "metrics": {
+    "silero_speech_duration": 287.79999999999995,
+    "sensevoice_speech_duration": 292.82000000000005,
+    "union_speech_duration": 293.49,
+    "silero_interval_count": 20,
+    "sensevoice_interval_count": 7,
+    "union_interval_count": 6,
+    "silero_only_duration": 0.6699999999999875,
+    "sensevoice_only_duration": 5.690000000000039,
+    "overlap_duration": 287.13,
+    "final_keep_duration": 294.971995,
+    "final_cut_duration": 5.030000000000001,
+    "removed_percentage": 1.6766555169074795,
+    "sensevoice_model_load_time": 11.296873799999958,
+    "sensevoice_inference_time": 3.8755472999982885,
+    "silero_processing_time": 6.643730900001174,
+    "fusion_processing_time": 0.00016760000107751694,
+    "total_analysis_time": 29.763925400000517,
+    "known_whisper_gap_count": 18,
+    "protected_by_silero_count": 18,
+    "protected_by_sensevoice_count": 15,
+    "protected_by_union_count": 18,
+    "still_unprotected_count": 0
+  }
+}

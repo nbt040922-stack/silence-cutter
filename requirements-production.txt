@@ -1,0 +1,7 @@
+--extra-index-url https://download.pytorch.org/whl/cu130
+torch==2.11.0+cu130
+torchaudio==2.11.0+cu130
+funasr==1.4.1
+modelscope>=1.39
+silero-vad>=6,<7
+numpy>=1.26

@@ -1,0 +1,220 @@
+{
+  "generated_at_unix": 1786343407.0235548,
+  "input": "D:\\Silence_cutter\\input.mp4",
+  "output": "D:\\Silence_cutter\\output.tight2.mp4",
+  "pipeline": "Silero + SenseVoiceSmall -> UNION -> KEEP/CUT -> NVENC",
+  "whisper_loaded": false,
+  "funasr_nano_loaded": false,
+  "srt_generated": false,
+  "cold_analysis": {
+    "output_path": null,
+    "report_path": "C:\\Users\\nbt04\\AppData\\Local\\Temp\\production-runs-q3hklid8\\cold.json",
+    "input_duration": 300.001995,
+    "output_duration": null,
+    "silero_speech_duration": 286.79999999999995,
+    "sensevoice_speech_duration": 290.8500000000001,
+    "union_speech_duration": 291.8,
+    "keep_duration": 292.451995,
+    "cut_duration": 7.549999999999997,
+    "removed_percentage": 2.5166499309446246,
+    "silero_interval_count": 20,
+    "sensevoice_interval_count": 76,
+    "sensevoice_raw_asr_segment_count": 7,
+    "sensevoice_raw_asr_segment_duration": 291.36000000000007,
+    "sensevoice_fine_speech_interval_count": 76,
+    "sensevoice_fine_speech_duration": 290.8500000000001,
+    "largest_sensevoice_asr_segment": 183.02000000000004,
+    "largest_sensevoice_fine_speech_interval": 14.849999999999994,
+    "final_union_interval_count": 8,
+    "final_keep_count": 4,
+    "final_cut_count": 3,
+    "audio_extraction_time": 0.2995978999988438,
+    "silero_time": 12.033460299999206,
+    "sensevoice_load_time": 15.959580200000346,
+    "sensevoice_inference_time": 6.849614299999303,
+    "detector_wall_time": 33.78470060000109,
+    "fusion_time": 0.00036159999945084564,
+    "timeline_time": 0.00014999999984866008,
+    "analysis_time": 34.147303899999315,
+    "render_time": 0.0,
+    "total_time": 34.1473189999997,
+    "warm_model": false,
+    "parallel_detectors": true,
+    "analysis_only": true,
+    "no_speech_detected": false,
+    "known_whisper_gap_count": 18,
+    "protected_by_silero_count": 18,
+    "protected_by_sensevoice_count": 18,
+    "protected_by_union_count": 18,
+    "fully_protected_by_union_count": 16,
+    "partially_protected_by_union_count": 2,
+    "still_unprotected_count": 0,
+    "keep_intervals": [
+      {
+        "start": 0.0,
+        "end": 26.4
+      },
+      {
+        "start": 30.99,
+        "end": 31.87
+      },
+      {
+        "start": 33.05,
+        "end": 112.0
+      },
+      {
+        "start": 113.78,
+        "end": 300.001995
+      }
+    ],
+    "cut_intervals": [
+      {
+        "start": 26.4,
+        "end": 30.99
+      },
+      {
+        "start": 31.87,
+        "end": 33.05
+      },
+      {
+        "start": 112.0,
+        "end": 113.78
+      }
+    ]
+  },
+  "warm_analysis": {
+    "output_path": null,
+    "report_path": "C:\\Users\\nbt04\\AppData\\Local\\Temp\\production-runs-q3hklid8\\warm.json",
+    "input_duration": 300.001995,
+    "output_duration": null,
+    "silero_speech_duration": 286.79999999999995,
+    "sensevoice_speech_duration": 290.8500000000001,
+    "union_speech_duration": 291.8,
+    "keep_duration": 292.451995,
+    "cut_duration": 7.549999999999997,
+    "removed_percentage": 2.5166499309446246,
+    "silero_interval_count": 20,
+    "sensevoice_interval_count": 76,
+    "sensevoice_raw_asr_segment_count": 7,
+    "sensevoice_raw_asr_segment_duration": 291.36000000000007,
+    "sensevoice_fine_speech_interval_count": 76,
+    "sensevoice_fine_speech_duration": 290.8500000000001,
+    "largest_sensevoice_asr_segment": 183.02000000000004,
+    "largest_sensevoice_fine_speech_interval": 14.849999999999994,
+    "final_union_interval_count": 8,
+    "final_keep_count": 4,
+    "final_cut_count": 3,
+    "audio_extraction_time": 0.2982367999993585,
+    "silero_time": 5.843488700000307,
+    "sensevoice_load_time": 0.0,
+    "sensevoice_inference_time": 7.16001039999901,
+    "detector_wall_time": 7.1616753000016615,
+    "fusion_time": 0.00036550000004353933,
+    "timeline_time": 0.00015669999993406236,
+    "analysis_time": 7.521461400001499,
+    "render_time": 0.0,
+    "total_time": 7.5214754000007815,
+    "warm_model": true,
+    "parallel_detectors": true,
+    "analysis_only": true,
+    "no_speech_detected": false,
+    "known_whisper_gap_count": 18,
+    "protected_by_silero_count": 18,
+    "protected_by_sensevoice_count": 18,
+    "protected_by_union_count": 18,
+    "fully_protected_by_union_count": 16,
+    "partially_protected_by_union_count": 2,
+    "still_unprotected_count": 0,
+    "keep_intervals": [
+      {
+        "start": 0.0,
+        "end": 26.4
+      },
+      {
+        "start": 30.99,
+        "end": 31.87
+      },
+      {
+        "start": 33.05,
+        "end": 112.0
+      },
+      {
+        "start": 113.78,
+        "end": 300.001995
+      }
+    ],
+    "cut_intervals": [
+      {
+        "start": 26.4,
+        "end": 30.99
+      },
+      {
+        "start": 31.87,
+        "end": 33.05
+      },
+      {
+        "start": 112.0,
+        "end": 113.78
+      }
+    ]
+  },
+  "detector_comparison": {
+    "sequential_detector_times": [
+      10.981015200000911,
+      11.223641900000075
+    ],
+    "parallel_detector_times": [
+      8.09286449999854,
+      7.353995400000713
+    ],
+    "sequential_detector_median": 11.102328550000493,
+    "parallel_detector_median": 7.723429949999627,
+    "chosen_default": "parallel"
+  },
+  "full_run": {
+    "output_path": "D:\\Silence_cutter\\output.tight2.mp4",
+    "report_path": "D:\\Silence_cutter\\output.tight2.speech.json",
+    "input_duration": 300.001995,
+    "output_duration": 292.466667,
+    "silero_speech_duration": 286.79999999999995,
+    "sensevoice_speech_duration": 290.8500000000001,
+    "union_speech_duration": 291.8,
+    "keep_duration": 292.451995,
+    "cut_duration": 7.549999999999997,
+    "removed_percentage": 2.5166499309446246,
+    "silero_interval_count": 20,
+    "sensevoice_interval_count": 76,
+    "sensevoice_raw_asr_segment_count": 7,
+    "sensevoice_raw_asr_segment_duration": 291.36000000000007,
+    "sensevoice_fine_speech_interval_count": 76,
+    "sensevoice_fine_speech_duration": 290.8500000000001,
+    "largest_sensevoice_asr_segment": 183.02000000000004,
+    "largest_sensevoice_fine_speech_interval": 14.849999999999994,
+    "final_union_interval_count": 8,
+    "final_keep_count": 4,
+    "final_cut_count": 3,
+    "audio_extraction_time": 0.31778920000033395,
+    "silero_time": 6.5340491000006296,
+    "sensevoice_load_time": 0.0,
+    "sensevoice_inference_time": 7.544589799999812,
+    "detector_wall_time": 7.546242999998867,
+    "fusion_time": 0.0003692999998747837,
+    "timeline_time": 0.0001508999994257465,
+    "analysis_time": 7.934203599999819,
+    "render_time": 21.944891999999527,
+    "total_time": 29.948066399998424,
+    "warm_model": true,
+    "parallel_detectors": true,
+    "analysis_only": false,
+    "no_speech_detected": false,
+    "known_whisper_gap_count": 18,
+    "protected_by_silero_count": 18,
+    "protected_by_sensevoice_count": 18,
+    "protected_by_union_count": 18,
+    "fully_protected_by_union_count": 16,
+    "partially_protected_by_union_count": 2,
+    "still_unprotected_count": 0
+  },
+  "tests": "123 passed, 1 skipped, 44 subtests passed in 3.60s",
+  "pass": true
+}

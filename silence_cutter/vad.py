@@ -26,6 +26,7 @@ def detect_speech(
         _model(),
         threshold=threshold,
         sampling_rate=sample_rate,
+        speech_pad_ms=0,
         return_seconds=True,
     )
     return [

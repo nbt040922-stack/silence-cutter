@@ -1,12 +1,26 @@
 import tempfile
 import unittest
 import wave
+from types import SimpleNamespace
 from pathlib import Path
+from unittest.mock import Mock, patch
 
-from silence_cutter.vad import _read_pcm_wav
+from silence_cutter.vad import _read_pcm_wav, detect_speech
 
 
 class VadAudioTests(unittest.TestCase):
+    def test_silero_internal_padding_is_disabled(self):
+        timestamps = Mock(return_value=[])
+        module = SimpleNamespace(
+            get_speech_timestamps=timestamps,
+            read_audio=Mock(return_value=object()),
+        )
+        with patch.dict("sys.modules", {"silero_vad": module}), patch(
+            "silence_cutter.vad._model", return_value=object()
+        ):
+            detect_speech(Path("analysis.wav"))
+        self.assertEqual(timestamps.call_args.kwargs["speech_pad_ms"], 0)
+
     def test_reads_analysis_pcm_without_torchaudio_backend(self):
         with tempfile.TemporaryDirectory() as directory:
             path = Path(directory) / "analysis.wav"
