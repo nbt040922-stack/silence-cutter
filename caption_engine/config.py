@@ -19,6 +19,27 @@ class CaptionConfig:
     max_gap_between_words: float = 0.8
     allow_cpu_fallback: bool = False
     fallback_compute_type: str = "int8"
+    adaptive_segmentation: bool = True
+    speech_rate_window_seconds: float = 5.0
+    target_reading_cps: float = 17.0
+    max_reading_cps: float = 22.0
+    adaptive_reference_cps: float = 7.0
+    adaptive_reference_wps: float = 2.4
+    adaptive_base_target_duration: float = 2.8
+    adaptive_min_target_duration: float = 1.2
+    adaptive_max_target_duration: float = 4.2
+    absolute_max_caption_duration: float = 6.0
+    adaptive_pause_boundary: float = 0.45
+    boundary_scoring_enabled: bool = True
+    weak_pause_seconds: float = 0.12
+    medium_pause_seconds: float = 0.25
+    strong_pause_seconds: float = 0.45
+    preferred_cjk_chars: int = 22
+    soft_max_cjk_chars: int = 26
+    absolute_max_cjk_chars: int = 30
+    absolute_min_caption_duration: float = 0.35
+    boundary_lookahead_tokens: int = 16
+    boundary_preserve_score: float = 8.25
 
     def __post_init__(self) -> None:
         if not self.model_size.strip():
@@ -33,6 +54,10 @@ class CaptionConfig:
             "max_chars_per_line",
             "max_lines",
             "max_words_per_caption",
+            "preferred_cjk_chars",
+            "soft_max_cjk_chars",
+            "absolute_max_cjk_chars",
+            "boundary_lookahead_tokens",
         ):
             if getattr(self, name) <= 0:
                 raise ValueError(f"{name} must be positive")
@@ -42,6 +67,43 @@ class CaptionConfig:
             raise ValueError("max_caption_duration must be positive")
         if self.min_caption_duration > self.max_caption_duration:
             raise ValueError("min_caption_duration cannot exceed maximum")
+        for name in (
+            "speech_rate_window_seconds",
+            "target_reading_cps",
+            "max_reading_cps",
+            "adaptive_reference_cps",
+            "adaptive_reference_wps",
+            "adaptive_base_target_duration",
+            "adaptive_min_target_duration",
+            "adaptive_max_target_duration",
+            "absolute_max_caption_duration",
+        ):
+            if getattr(self, name) <= 0:
+                raise ValueError(f"{name} must be positive")
+        if self.adaptive_pause_boundary < 0:
+            raise ValueError("adaptive_pause_boundary must be non-negative")
+        if self.target_reading_cps > self.max_reading_cps:
+            raise ValueError("target_reading_cps cannot exceed maximum")
+        if self.adaptive_min_target_duration > self.adaptive_max_target_duration:
+            raise ValueError("adaptive target duration limits are invalid")
+        if self.absolute_max_caption_duration < self.adaptive_max_target_duration:
+            raise ValueError("absolute caption duration must cover adaptive maximum")
+        if not (
+            0 <= self.weak_pause_seconds
+            <= self.medium_pause_seconds
+            <= self.strong_pause_seconds
+        ):
+            raise ValueError("pause thresholds must be ordered and non-negative")
+        if not (
+            self.preferred_cjk_chars
+            <= self.soft_max_cjk_chars
+            <= self.absolute_max_cjk_chars
+        ):
+            raise ValueError("CJK character limits must be ordered")
+        if self.absolute_min_caption_duration <= 0:
+            raise ValueError("absolute_min_caption_duration must be positive")
+        if self.boundary_preserve_score < 0:
+            raise ValueError("boundary_preserve_score must be non-negative")
 
     def to_dict(self) -> dict[str, object]:
         return asdict(self)

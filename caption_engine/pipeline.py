@@ -9,7 +9,7 @@ from silence_cutter.audio import MediaProcessError, extract_analysis_audio, prob
 
 from .config import CaptionConfig
 from .report import write_caption_report
-from .segmenter import segment_transcript
+from .segmenter import segment_transcript_with_diagnostics
 from .srt import write_srt
 from .transcriber import transcribe_audio
 
@@ -42,7 +42,9 @@ def generate_captions(
         )
 
     caption_started = time.perf_counter()
-    captions = segment_transcript(transcription.segments, config)
+    captions, segmentation_diagnostics = segment_transcript_with_diagnostics(
+        transcription.segments, config
+    )
     caption_processing_time = time.perf_counter() - caption_started
 
     srt_path = (
@@ -90,6 +92,7 @@ def generate_captions(
         "word_count": sum(len(segment.words) for segment in transcription.segments),
         "caption_count": len(captions),
         "long_single_token_caption_count": long_single_token_caption_count,
+        "segmentation_diagnostics": segmentation_diagnostics,
         "requested_device": transcription.requested_device,
         "requested_compute_type": transcription.requested_compute_type,
         "actual_device": transcription.actual_device,
@@ -124,6 +127,7 @@ def generate_captions(
             "word_count",
             "caption_count",
             "long_single_token_caption_count",
+            "segmentation_diagnostics",
             "requested_device",
             "requested_compute_type",
             "actual_device",

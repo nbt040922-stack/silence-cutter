@@ -17,9 +17,11 @@ def _parser() -> argparse.ArgumentParser:
     parser.add_argument("--batch-size", type=int, default=8)
     parser.add_argument("--language")
     parser.add_argument("--output", type=Path)
+    parser.add_argument("--report", type=Path)
     parser.add_argument("--no-batch", action="store_true")
     parser.add_argument("--allow-cpu-fallback", action="store_true")
     parser.add_argument("--benchmark", action="store_true")
+    parser.add_argument("--no-adaptive", action="store_true")
     return parser
 
 
@@ -55,6 +57,20 @@ def _benchmark_summary(result: dict[str, object], model: str) -> str:
         f"Words/tokens: {result['word_count']}",
         f"Captions: {result['caption_count']}",
     ])
+    diagnostics = result.get("segmentation_diagnostics")
+    if isinstance(diagnostics, dict):
+        lines.extend([
+            "",
+            f"Average speech rate: {diagnostics['average_speech_rate']:.2f} chars/s",
+            f"Average word rate: {diagnostics['average_words_per_second']:.2f} words/s",
+            f"Median caption: {diagnostics['median_caption_duration']:.2f} s",
+            f"Caption duration p10/p50/p90: {diagnostics['p10_caption_duration']:.2f} / "
+            f"{diagnostics['p50_caption_duration']:.2f} / "
+            f"{diagnostics['p90_caption_duration']:.2f} s",
+            f"Average chars/caption: {diagnostics['average_visible_characters_per_caption']:.2f}",
+            f"Reading load avg/max: {diagnostics['average_reading_load']:.2f} / "
+            f"{diagnostics['maximum_reading_load']:.2f} chars/s",
+        ])
     return "\n".join(lines)
 
 
@@ -68,8 +84,11 @@ def main() -> None:
         batch_enabled=not args.no_batch,
         batch_size=args.batch_size,
         allow_cpu_fallback=args.allow_cpu_fallback,
+        adaptive_segmentation=not args.no_adaptive,
     )
-    result = generate_captions(args.input, args.output, config=config)
+    result = generate_captions(
+        args.input, args.output, config=config, report_path=args.report
+    )
     if args.benchmark:
         print(_benchmark_summary(result, args.model))
     else:

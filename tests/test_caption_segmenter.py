@@ -78,7 +78,9 @@ class CaptionSegmenterTests(unittest.TestCase):
             ("い" * 40, 2.4, 4.9),
             ("たので", 4.9, 5.35),
         )
-        captions = segment_transcript(transcript(items), CaptionConfig())
+        captions = segment_transcript(
+            transcript(items), CaptionConfig(adaptive_segmentation=False)
+        )
         self.assertEqual(len(captions), 1)
         self.assertLessEqual(len(captions[0].text.splitlines()), 2)
         self.assertTrue(all(len(line) <= 47 for line in captions[0].text.splitlines()))
@@ -112,7 +114,12 @@ class CaptionSegmenterTests(unittest.TestCase):
             for index, text in enumerate(tokens)
         ]
         captions = segment_transcript(
-            transcript(items), config(max_words_per_caption=2, max_caption_duration=10)
+            transcript(items),
+            config(
+                max_words_per_caption=2,
+                max_caption_duration=10,
+                boundary_scoring_enabled=False,
+            ),
         )
         self.assertEqual(len(captions), 1)
         self.assertEqual(captions[0].text, "".join(tokens))
@@ -163,7 +170,12 @@ class CaptionSegmenterTests(unittest.TestCase):
     def test_max_duration_break(self):
         items = words(("First", 0, 1), ("second", 2, 3), ("third", 5.5, 6.5))
         captions = segment_transcript(
-            transcript(items), config(max_gap_between_words=10, max_caption_duration=5)
+            transcript(items),
+            config(
+                max_gap_between_words=10,
+                max_caption_duration=5,
+                boundary_scoring_enabled=False,
+            ),
         )
         self.assertEqual(len(captions), 2)
 
