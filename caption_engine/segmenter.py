@@ -20,6 +20,8 @@ _JP_CONTINUATION_PREFIXES = (
     "ました", "ない", "なく", "たり", "ながら", "よう", "かな", "ず",
 )
 _JP_TE_AUXILIARIES = ("いる", "いく", "いた", "みる", "みました")
+_JP_HONORIFICS = ("\u541b", "\u3055\u3093", "\u3061\u3083\u3093")
+_JP_SMALL_KANA = frozenset("\u3063\u3083\u3085\u3087\u3041\u3043\u3045\u3047\u3049")
 _JP_PHRASE_ENDINGS = (
     "ので", "から", "けど", "けれど", "けれども", "と思ってて", "思ってて",
     "です", "ます", "ました", "でした", "ですね", "ますね", "かな",
@@ -37,6 +39,7 @@ _BOUNDARY_WEIGHTS = {
     "grammatical_split": 9.0,
     "connected_token": 7.0,
     "orphan_tail": 7.0,
+    "lexical_split": 9.0,
 }
 
 
@@ -284,12 +287,20 @@ def _tiny_merge_candidate(
         and float(components.get("visual_capacity", 0.0)) >= 2.5
         and boundary_score >= 4.0
     )
+    natural_phrase_boundary = (
+        isinstance(components, dict)
+        and float(components.get("phrase", 0.0))
+        >= _BOUNDARY_WEIGHTS["phrase_boundary"]
+        and not components.get("lexical_penalty")
+        and not components.get("grammatical_penalty")
+    )
     if (
         config.boundary_scoring_enabled
         and config.adaptive_segmentation
         and (
             boundary_score >= config.boundary_preserve_score
             or capacity_boundary
+            or natural_phrase_boundary
             or (
                 boundary_gap >= config.strong_pause_seconds
                 and boundary_score >= _BOUNDARY_WEIGHTS["strong_pause"]
@@ -542,8 +553,94 @@ def _is_katakana_text(text: str) -> bool:
     )
 
 
+def _is_kanji_char(character: str) -> bool:
+    codepoint = ord(character)
+    return (
+        0x3400 <= codepoint <= 0x4DBF
+        or 0x4E00 <= codepoint <= 0x9FFF
+        or 0xF900 <= codepoint <= 0xFAFF
+    )
+
+
+def _is_hiragana_char(character: str) -> bool:
+    return 0x3040 <= ord(character) <= 0x309F
+
+
+def _is_hiragana_text(text: str) -> bool:
+    return bool(text) and all(_is_hiragana_char(character) for character in text)
+
+
 def _clean_boundary_text(text: str) -> str:
     return text.strip().strip("".join(_CLOSE_PUNCTUATION | _OPEN_PUNCTUATION))
+
+
+def classify_boundary(
+    left: WordTimestamp,
+    right: WordTimestamp,
+    previous_word: WordTimestamp | None = None,
+    next_word: WordTimestamp | None = None,
+) -> dict[str, object]:
+    del next_word
+    left_text = _clean_boundary_text(left.text)
+    right_text = _clean_boundary_text(right.text)
+    penalty = 0.0
+    if left_text and right_text and (
+        _is_japanese(left_text + right_text)
+        or _is_kanji_char(left_text[-1])
+        or _is_kanji_char(right_text[0])
+    ):
+        left_visible = visible_character_count(left_text)
+        right_visible = visible_character_count(right_text)
+        if _is_katakana_text(left_text) and _is_katakana_text(right_text):
+            penalty = _BOUNDARY_WEIGHTS["lexical_split"]
+        elif right_text.startswith(_JP_HONORIFICS) and (
+            _is_katakana_text(left_text) or _is_kanji_char(left_text[-1])
+        ):
+            penalty = _BOUNDARY_WEIGHTS["lexical_split"]
+        elif (
+            _is_kanji_char(left_text[-1])
+            and _is_kanji_char(right_text[0])
+            and (left_visible == 1 or right_visible == 1)
+        ):
+            penalty = _BOUNDARY_WEIGHTS["lexical_split"] * 0.9
+        elif (
+            _is_kanji_char(left_text[-1])
+            and _is_hiragana_char(right_text[0])
+            and (left_visible == 1 or right_visible <= 2)
+        ):
+            penalty = _BOUNDARY_WEIGHTS["lexical_split"] * 0.8
+        elif (
+            _is_hiragana_text(left_text)
+            and _is_hiragana_text(right_text)
+            and bool(_JP_SMALL_KANA.intersection(left_text + right_text))
+            and (left_visible <= 3 or right_visible <= 3)
+        ):
+            penalty = _BOUNDARY_WEIGHTS["lexical_split"]
+        elif (
+            left_visible == 1
+            and right_visible <= 2
+            and _is_hiragana_text(left_text + right_text)
+            and previous_word is not None
+        ):
+            previous_text = _clean_boundary_text(previous_word.text)
+            if previous_text and (
+                previous_text[-1].isdigit()
+                or _is_kanji_char(previous_text[-1])
+            ):
+                penalty = _BOUNDARY_WEIGHTS["lexical_split"] * 0.8
+        elif (
+            left_visible == 1
+            and right_visible == 1
+            and _is_hiragana_char(left_text[-1])
+            and _is_hiragana_char(right_text[0])
+        ):
+            penalty = _BOUNDARY_WEIGHTS["lexical_split"] * 0.8
+    return {
+        "classification": (
+            "protected" if penalty >= 7.0 else "weak" if penalty else "safe"
+        ),
+        "lexical_penalty": penalty,
+    }
 
 
 def _japanese_grammatical_penalty(
@@ -560,8 +657,6 @@ def _japanese_grammatical_penalty(
     if left_text.endswith("けれ") and right_text.startswith("ども"):
         return _BOUNDARY_WEIGHTS["grammatical_split"]
     if left_text and _is_cjk_char(left_text[-1]) and right_text.startswith(("く", "かった")):
-        return _BOUNDARY_WEIGHTS["grammatical_split"]
-    if _is_katakana_text(left_text) and _is_katakana_text(right_text):
         return _BOUNDARY_WEIGHTS["grammatical_split"]
     return 0.0
 
@@ -619,10 +714,16 @@ def _punctuation_score(text: str) -> float:
 def _visual_capacity_score(text: str, config: CaptionConfig) -> float:
     visible = visible_character_count(text)
     if _has_cjk(text):
-        if visible <= config.preferred_cjk_chars:
+        pressure_start = max(8, int(round(config.preferred_cjk_chars * 0.5)))
+        if visible <= pressure_start:
             return 0.0
+        if visible <= config.preferred_cjk_chars:
+            return 1.5 * (
+                (visible - pressure_start)
+                / max(1, config.preferred_cjk_chars - pressure_start)
+            )
         if visible <= config.soft_max_cjk_chars:
-            return 1.0 + 2.0 * (
+            return 1.5 + 1.5 * (
                 (visible - config.preferred_cjk_chars)
                 / max(1, config.soft_max_cjk_chars - config.preferred_cjk_chars)
             )
@@ -685,6 +786,10 @@ def _boundary_score(
         _BOUNDARY_WEIGHTS["phrase_boundary"]
         if _is_japanese(text)
         and _clean_boundary_text(text).endswith(_JP_PHRASE_ENDINGS)
+        and (
+            visible_character_count(text) >= 8
+            or gap >= config.weak_pause_seconds
+        )
         else 0.0
     )
     visual = _visual_capacity_score(text, config)
@@ -709,6 +814,16 @@ def _boundary_score(
         min(3.0, 3.0 * (reading_load - config.target_reading_cps) / config.target_reading_cps),
     )
     grammatical = _japanese_grammatical_penalty(left, right) if right else 0.0
+    lexical = (
+        float(classify_boundary(
+            left,
+            right,
+            words[boundary - 2] if boundary - 2 >= 0 else None,
+            words[boundary + 1] if boundary + 1 < len(words) else None,
+        )["lexical_penalty"])
+        if right
+        else 0.0
+    )
     if right and right.space_before is False and not _has_cjk(left.text + right.text):
         grammatical = max(grammatical, _BOUNDARY_WEIGHTS["connected_token"])
     orphan = _orphan_tail_penalty(words, boundary)
@@ -721,16 +836,16 @@ def _boundary_score(
         "duration_pressure": duration_score,
         "reading_load": reading,
         "grammatical_penalty": grammatical,
+        "lexical_penalty": lexical,
         "orphan_penalty": orphan,
         "size_overrun_penalty": size_overrun,
     }
-    score = sum(
-        value
-        for name, value in components.items()
-        if name not in (
-            "grammatical_penalty", "orphan_penalty", "size_overrun_penalty"
-        )
-    ) - grammatical - orphan - size_overrun
+    boundary_quality = (
+        pause + punctuation + segment_boundary + phrase
+        - grammatical - lexical - orphan
+    )
+    split_urgency = visual + duration_score + reading - size_overrun
+    score = boundary_quality + split_urgency * 0.35
     return {
         "time": left.end,
         "score": score,
@@ -738,6 +853,10 @@ def _boundary_score(
         "caption_duration": duration,
         "visible_characters": visible_character_count(text),
         "adaptive_target_duration": target,
+        "boundary_quality": boundary_quality,
+        "split_urgency": split_urgency,
+        "lexical_penalty": lexical,
+        "forced": False,
         "components": components,
     }
 
@@ -768,6 +887,7 @@ def _choose_boundary(
     rates_by_word: dict[int, dict[str, float]],
     segment_by_word: dict[int, int],
     config: CaptionConfig,
+    protected_boundaries: dict[str, set[tuple[float, float]]],
 ) -> tuple[int, dict[str, object]]:
     candidates: list[tuple[int, dict[str, object]]] = []
     max_tokens = config.boundary_lookahead_tokens * 2
@@ -779,6 +899,14 @@ def _choose_boundary(
             words, start, boundary, rates_by_word, segment_by_word, config
         )
         components = diagnostics["components"]
+        boundary_key = (
+            words[boundary - 1].end,
+            words[boundary].start if boundary < len(words) else words[boundary - 1].end,
+        )
+        if components["lexical_penalty"]:
+            protected_boundaries["lexical"].add(boundary_key)
+        if components["grammatical_penalty"]:
+            protected_boundaries["grammatical"].add(boundary_key)
         strong_natural_boundary = (
             components["punctuation"] >= _BOUNDARY_WEIGHTS["strong_punctuation"]
             or components["pause"] >= _BOUNDARY_WEIGHTS["strong_pause"]
@@ -794,29 +922,77 @@ def _choose_boundary(
                 config.absolute_min_caption_duration, config.min_caption_duration
             )
             and not components["grammatical_penalty"]
+            and not components["lexical_penalty"]
         ):
             break
         if boundary - start >= config.boundary_lookahead_tokens and (
-            diagnostics["visible_characters"] >= config.preferred_cjk_chars
-            or diagnostics["caption_duration"] >= diagnostics["adaptive_target_duration"]
+            diagnostics["visible_characters"] >= config.soft_max_cjk_chars
+            or diagnostics["caption_duration"]
+            >= diagnostics["adaptive_target_duration"] * 1.2
+        ) and any(
+            not candidate[1]["components"]["lexical_penalty"]
+            and not candidate[1]["components"]["grammatical_penalty"]
+            and not candidate[1]["components"]["orphan_penalty"]
+            for candidate in candidates
         ):
             break
     if not candidates:
         boundary = min(start + 1, len(words))
-        return boundary, _boundary_score(
+        diagnostics = _boundary_score(
             words, start, boundary, rates_by_word, segment_by_word, config
         )
-    return max(
-        candidates,
-        key=lambda item: (
-            item[1]["score"],
-            -abs(
-                item[1]["caption_duration"]
-                - item[1]["adaptive_target_duration"]
+        diagnostics["forced"] = boundary < len(words)
+        return boundary, diagnostics
+    safe = [
+        item for item in candidates
+        if not item[1]["components"]["lexical_penalty"]
+        and not item[1]["components"]["grammatical_penalty"]
+        and not item[1]["components"]["orphan_penalty"]
+    ]
+    forced = not safe
+    pool = safe or candidates
+    if forced:
+        selected = min(
+            pool,
+            key=lambda item: (
+                item[1]["components"]["lexical_penalty"]
+                + item[1]["components"]["grammatical_penalty"]
+                + item[1]["components"]["orphan_penalty"],
+                abs(item[1]["split_urgency"] - 2.0),
+                -item[1]["caption_duration"],
             ),
-            item[0],
-        ),
-    )
+        )
+        selected[1]["forced"] = True
+        return selected
+    natural = [item for item in pool if item[1]["boundary_quality"] > 0]
+    urgent = [item for item in pool if item[1]["split_urgency"] >= 2.0]
+    if natural and urgent:
+        first_urgent = urgent[0]
+        nearby_natural = [
+            item for item in natural
+            if item[0] <= first_urgent[0] + 4
+            and item[1]["caption_duration"]
+            <= first_urgent[1]["caption_duration"] + 0.7
+        ]
+    else:
+        nearby_natural = natural
+    if nearby_natural:
+        selected = max(
+            nearby_natural,
+            key=lambda item: (
+                item[1]["boundary_quality"],
+                -abs(item[1]["split_urgency"] - 1.5),
+                -item[1]["caption_duration"],
+            ),
+        )
+    else:
+        selected = (
+            min(urgent, key=lambda item: item[0])
+            if urgent
+            else max(pool, key=lambda item: (item[1]["split_urgency"], item[0]))
+        )
+    selected[1]["forced"] = False
+    return selected
 
 
 def _segment_with_boundary_scoring(
@@ -824,19 +1000,28 @@ def _segment_with_boundary_scoring(
     rates_by_word: dict[int, dict[str, float]],
     segment_by_word: dict[int, int],
     config: CaptionConfig,
-) -> tuple[list[CaptionSegment], list[dict[str, object]]]:
+) -> tuple[
+    list[CaptionSegment], list[dict[str, object]], dict[str, int]
+]:
     captions: list[CaptionSegment] = []
     boundaries: list[dict[str, object]] = []
+    protected_boundaries: dict[str, set[tuple[float, float]]] = {
+        "lexical": set(),
+        "grammatical": set(),
+    }
     start = 0
     while start < len(words):
         boundary, diagnostics = _choose_boundary(
-            words, start, rates_by_word, segment_by_word, config
+            words, start, rates_by_word, segment_by_word, config,
+            protected_boundaries,
         )
         captions.append(_caption(words[start:boundary], config))
         if boundary < len(words):
             boundaries.append(diagnostics)
         start = boundary
-    return captions, boundaries
+    return captions, boundaries, {
+        name: len(items) for name, items in protected_boundaries.items()
+    }
 
 
 def _percentile(values: list[float], percentile: float) -> float:
@@ -855,7 +1040,10 @@ def _segmentation_diagnostics(
     rates_by_word: dict[int, dict[str, float]],
     config: CaptionConfig,
     boundary_diagnostics: list[dict[str, object]] | None = None,
+    protected_boundary_counts: dict[str, int] | None = None,
 ) -> dict[str, object]:
+    boundary_diagnostics = boundary_diagnostics or []
+    protected_boundary_counts = protected_boundary_counts or {}
     details: list[dict[str, float]] = []
     for caption in captions:
         duration = caption.end - caption.start
@@ -907,7 +1095,16 @@ def _segmentation_diagnostics(
         ),
         "maximum_reading_load": max(reading_loads, default=0.0),
         "captions": details,
-        "selected_boundaries": boundary_diagnostics or [],
+        "forced_boundary_count": sum(
+            bool(boundary.get("forced")) for boundary in boundary_diagnostics
+        ),
+        "lexical_protected_boundary_count": protected_boundary_counts.get(
+            "lexical", 0
+        ),
+        "grammatical_protected_boundary_count": protected_boundary_counts.get(
+            "grammatical", 0
+        ),
+        "selected_boundaries": boundary_diagnostics,
     }
 
 
@@ -938,8 +1135,10 @@ def segment_transcript_with_diagnostics(
     rates_by_word = {id(word): rate for word, rate in zip(words, rates)}
 
     if config.boundary_scoring_enabled and config.adaptive_segmentation:
-        captions, boundary_diagnostics = _segment_with_boundary_scoring(
-            words, rates_by_word, segment_by_word, config
+        captions, boundary_diagnostics, protected_boundary_counts = (
+            _segment_with_boundary_scoring(
+                words, rates_by_word, segment_by_word, config
+            )
         )
         boundaries_by_pair = {
             (caption.words[-1].end, captions[index + 1].words[0].start):
@@ -956,7 +1155,11 @@ def segment_transcript_with_diagnostics(
             for index, caption in enumerate(captions[:-1])
         ]
         return captions, _segmentation_diagnostics(
-            captions, rates_by_word, config, final_boundary_diagnostics
+            captions,
+            rates_by_word,
+            config,
+            final_boundary_diagnostics,
+            protected_boundary_counts,
         )
 
     captions: list[CaptionSegment] = []

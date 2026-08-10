@@ -6,8 +6,10 @@ from pathlib import Path
 from typing import Any
 
 from silence_cutter.audio import MediaProcessError, extract_analysis_audio, probe_media
+from silence_cutter.vad import detect_speech
 
 from .config import CaptionConfig
+from .coverage import resolve_caption_coverage
 from .report import write_caption_report
 from .segmenter import segment_transcript_with_diagnostics
 from .srt import write_srt
@@ -40,10 +42,17 @@ def generate_captions(
         transcription = transcribe_audio(
             audio_path, config, audio_duration=audio_duration
         )
+        try:
+            speech_intervals = detect_speech(audio_path)
+        except (ImportError, OSError, RuntimeError):
+            speech_intervals = None
 
     caption_started = time.perf_counter()
     captions, segmentation_diagnostics = segment_transcript_with_diagnostics(
         transcription.segments, config
+    )
+    captions, coverage_diagnostics = resolve_caption_coverage(
+        captions, speech_intervals, config
     )
     caption_processing_time = time.perf_counter() - caption_started
 
@@ -93,6 +102,7 @@ def generate_captions(
         "caption_count": len(captions),
         "long_single_token_caption_count": long_single_token_caption_count,
         "segmentation_diagnostics": segmentation_diagnostics,
+        "coverage_diagnostics": coverage_diagnostics,
         "requested_device": transcription.requested_device,
         "requested_compute_type": transcription.requested_compute_type,
         "actual_device": transcription.actual_device,
@@ -128,6 +138,7 @@ def generate_captions(
             "caption_count",
             "long_single_token_caption_count",
             "segmentation_diagnostics",
+            "coverage_diagnostics",
             "requested_device",
             "requested_compute_type",
             "actual_device",

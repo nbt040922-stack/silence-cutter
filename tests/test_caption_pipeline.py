@@ -45,10 +45,11 @@ class CaptionPipelineTests(unittest.TestCase):
         self.assertIn("cuDNN 9: found", summary)
 
     @patch("caption_engine.pipeline.transcribe_audio")
+    @patch("caption_engine.pipeline.detect_speech", return_value=[{"start": 0.0, "end": 6.0}])
     @patch("caption_engine.pipeline.extract_analysis_audio")
     @patch("caption_engine.pipeline.probe_media")
     def test_language_metadata_serialization(
-        self, probe_media, extract_audio, transcribe_audio
+        self, probe_media, extract_audio, _detect_speech, transcribe_audio
     ):
         probe_media.side_effect = [
             {"duration": 10.0, "has_audio": True},
@@ -96,6 +97,7 @@ class CaptionPipelineTests(unittest.TestCase):
         self.assertEqual(report["transcription_inference_time"], 2.3)
         self.assertIn("audio_extraction_time", report)
         self.assertIn("output_write_time", report)
+        self.assertEqual(report["coverage_diagnostics"]["speech_coverage_percentage"], 100.0)
         self.assertTrue(report["cuda_runtime"]["available"])
         _, kwargs = transcribe_audio.call_args
         self.assertEqual(kwargs["audio_duration"], 9.9)

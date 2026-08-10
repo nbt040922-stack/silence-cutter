@@ -71,6 +71,24 @@ def _benchmark_summary(result: dict[str, object], model: str) -> str:
             f"Reading load avg/max: {diagnostics['average_reading_load']:.2f} / "
             f"{diagnostics['maximum_reading_load']:.2f} chars/s",
         ])
+    coverage = result.get("coverage_diagnostics")
+    if isinstance(coverage, dict):
+        lines.extend([
+            "",
+            f"Speech duration: {coverage['speech_duration']:.2f} s",
+            f"Speech coverage: {coverage['speech_coverage_percentage']:.3f}%",
+            f"Bridged gaps: {coverage['bridged_gap_count']} "
+            f"({coverage['bridged_gap_duration']:.2f} s)",
+            f"Untranscribed speech gaps: {coverage['untranscribed_speech_gap_count']}",
+            f"Largest uncovered speech gap: "
+            f"{coverage['largest_uncovered_speech_gap']:.2f} s",
+        ])
+        for gap in coverage["uncovered_speech_regions"]:
+            if gap["duration"] > 0.30:
+                lines.append(
+                    f"UNCOVERED SPEECH: {gap['start']:.2f}-{gap['end']:.2f} "
+                    f"({gap['duration']:.2f} s)"
+                )
     return "\n".join(lines)
 
 

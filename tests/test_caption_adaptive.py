@@ -38,7 +38,7 @@ class AdaptiveCaptionTests(unittest.TestCase):
             max(len(caption.words) for caption in fast_captions),
         )
 
-    def test_slow_japanese_keeps_more_characters_than_fast_japanese(self):
+    def test_japanese_rate_changes_target_without_breaking_hard_capacity(self):
         tokens = JAPANESE * 2
         slow = make_transcript(
             tokens, [index * 0.18 for index in range(len(tokens))], 0.14
@@ -46,11 +46,24 @@ class AdaptiveCaptionTests(unittest.TestCase):
         fast = make_transcript(
             tokens, [index * 0.06 for index in range(len(tokens))], 0.05
         )
-        slow_captions = segment_transcript(slow, CaptionConfig())
-        fast_captions = segment_transcript(fast, CaptionConfig())
+        slow_captions, slow_diagnostics = segment_transcript_with_diagnostics(
+            slow, CaptionConfig()
+        )
+        fast_captions, fast_diagnostics = segment_transcript_with_diagnostics(
+            fast, CaptionConfig()
+        )
         self.assertGreater(
-            max(len(caption.text.replace("\n", "")) for caption in slow_captions),
-            max(len(caption.text.replace("\n", "")) for caption in fast_captions),
+            sum(
+                item["adaptive_target_duration"]
+                for item in slow_diagnostics["captions"]
+            ) / len(slow_captions),
+            sum(
+                item["adaptive_target_duration"]
+                for item in fast_diagnostics["captions"]
+            ) / len(fast_captions),
+        )
+        self.assertTrue(
+            all(len(caption.text.replace("\n", "")) <= 30 for caption in fast_captions)
         )
         self.assertNotIn(" ", "".join(caption.text for caption in fast_captions))
 

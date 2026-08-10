@@ -40,6 +40,8 @@ class CaptionConfig:
     absolute_min_caption_duration: float = 0.35
     boundary_lookahead_tokens: int = 16
     boundary_preserve_score: float = 8.25
+    caption_bridge_gap: float = 0.20
+    caption_hold_max: float = 0.35
 
     def __post_init__(self) -> None:
         if not self.model_size.strip():
@@ -104,6 +106,8 @@ class CaptionConfig:
             raise ValueError("absolute_min_caption_duration must be positive")
         if self.boundary_preserve_score < 0:
             raise ValueError("boundary_preserve_score must be non-negative")
+        if not 0 <= self.caption_bridge_gap <= self.caption_hold_max:
+            raise ValueError("caption bridge timing limits are invalid")
 
     def to_dict(self) -> dict[str, object]:
         return asdict(self)
