@@ -1,0 +1,77 @@
+param(
+    [string]$PythonEnvironment = ".venv_asr_test",
+    [string]$SenseVoiceModelSource = $env:SILENCE_CUTTER_SENSEVOICE_MODEL_SOURCE,
+    [string]$FsmnVadModelSource = $env:SILENCE_CUTTER_FSMN_VAD_MODEL_SOURCE,
+    [switch]$SkipDesktopBuild
+)
+
+$ErrorActionPreference = "Stop"
+$repo = (Resolve-Path (Join-Path $PSScriptRoot "..")).Path
+$sourceEnvironment = (Resolve-Path (Join-Path $repo $PythonEnvironment)).Path
+$stage = Join-Path $repo "internal_release_rc"
+$payload = Join-Path $stage "Silence Cutter RC"
+
+if (([IO.Path]::GetFullPath($stage)).TrimEnd('\') -ne (Join-Path $repo "internal_release_rc")) {
+    throw "Refusing to clean unexpected staging path: $stage"
+}
+if (Test-Path -LiteralPath $stage) {
+    Remove-Item -LiteralPath $stage -Recurse -Force
+}
+New-Item -ItemType Directory -Force -Path $payload | Out-Null
+
+if (-not $SkipDesktopBuild) {
+    Push-Location (Join-Path $repo "desktop")
+    try { npm run tauri build -- --no-bundle } finally { Pop-Location }
+}
+
+$resources = Join-Path $payload "resources"
+$app = Join-Path $resources "app"
+$runtime = Join-Path $resources "runtime\python"
+$bin = Join-Path $resources "bin"
+$models = Join-Path $resources "models"
+$benchmark = Join-Path $resources "benchmark"
+New-Item -ItemType Directory -Force -Path $app,$runtime,$bin,$models,$benchmark | Out-Null
+
+foreach ($folder in "backend","formatter","production","silence_cutter","speech_detector") {
+    Copy-Item -LiteralPath (Join-Path $repo $folder) -Destination $app -Recurse
+}
+Copy-Item -LiteralPath (Join-Path $repo "requirements-production.txt") -Destination $app
+
+$pythonZip = Join-Path $env:TEMP "python-3.11.9-embed-amd64.zip"
+if (-not (Test-Path -LiteralPath $pythonZip)) {
+    Invoke-WebRequest "https://www.python.org/ftp/python/3.11.9/python-3.11.9-embed-amd64.zip" -OutFile $pythonZip
+}
+Expand-Archive -LiteralPath $pythonZip -DestinationPath $runtime
+New-Item -ItemType Directory -Force -Path (Join-Path $runtime "Lib\site-packages") | Out-Null
+Copy-Item -Path (Join-Path $sourceEnvironment "Lib\site-packages\*") -Destination (Join-Path $runtime "Lib\site-packages") -Recurse -Force
+Get-ChildItem -LiteralPath $runtime -Directory -Filter "__pycache__" -Recurse | Remove-Item -Recurse -Force
+Get-ChildItem -LiteralPath $runtime -File -Filter "*.pyc" -Recurse | Remove-Item -Force
+Set-Content -LiteralPath (Join-Path $runtime "python311._pth") -Encoding ASCII -Value @(
+    "python311.zip",
+    ".",
+    "Lib\site-packages",
+    "..\..\app",
+    "import site"
+)
+
+if (-not $SenseVoiceModelSource -or -not $FsmnVadModelSource) {
+    throw "Provide -SenseVoiceModelSource and -FsmnVadModelSource (or their SILENCE_CUTTER_* environment variables)"
+}
+$senseVoice = (Resolve-Path $SenseVoiceModelSource).Path
+$fsmnVad = (Resolve-Path $FsmnVadModelSource).Path
+Copy-Item -LiteralPath $senseVoice -Destination (Join-Path $models "SenseVoiceSmall") -Recurse
+Copy-Item -LiteralPath $fsmnVad -Destination (Join-Path $models "fsmn-vad") -Recurse
+
+$ffmpeg = (Get-Command ffmpeg -ErrorAction Stop).Source
+$ffprobe = (Get-Command ffprobe -ErrorAction Stop).Source
+Copy-Item -LiteralPath $ffmpeg,$ffprobe -Destination $bin
+Copy-Item -LiteralPath (Join-Path $repo "release_assets\hardware_benchmark.mp4") -Destination $benchmark
+Copy-Item -LiteralPath (Join-Path $repo "desktop\src-tauri\target\release\silence-cutter-desktop.exe") -Destination (Join-Path $payload "Silence Cutter.exe")
+Copy-Item -LiteralPath (Join-Path $repo "scripts\Install-SilenceCutter-RC.ps1") -Destination $stage
+Copy-Item -LiteralPath (Join-Path $repo "TEAM_HARDWARE_VALIDATION_REPORT.md") -Destination $stage
+
+& (Join-Path $repo "scripts\finalize_internal_rc.ps1")
+$bundleLink = Join-Path $repo "r"
+if (Test-Path -LiteralPath $bundleLink) { Remove-Item -LiteralPath $bundleLink -Force }
+New-Item -ItemType Junction -Path $bundleLink -Target $resources | Out-Null
+Write-Host "RC staged at $stage"

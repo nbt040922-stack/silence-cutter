@@ -1,9 +1,10 @@
 from __future__ import annotations
 
 import json
-import shutil
 import subprocess
 from pathlib import Path
+
+from .runtime_paths import find_executable
 
 
 class MediaProcessError(RuntimeError):
@@ -11,7 +12,7 @@ class MediaProcessError(RuntimeError):
 
 
 def _require_executable(name: str) -> str:
-    executable = shutil.which(name)
+    executable = find_executable(name)
     if not executable:
         raise MediaProcessError(f"{name} was not found on PATH")
     return executable

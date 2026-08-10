@@ -5,3 +5,5 @@ funasr==1.4.1
 modelscope>=1.39
 silero-vad>=6,<7
 numpy>=1.26
+Pillow>=10,<13
+yt-dlp==2026.7.4

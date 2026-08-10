@@ -1,6 +1,17 @@
-from dataclasses import asdict, dataclass
+from dataclasses import asdict, dataclass, field
 
 from silence_cutter.config import SilenceCutterConfig
+from silence_cutter.runtime_paths import model_reference
+
+
+def _sensevoice_model() -> str:
+    return model_reference("SenseVoiceSmall", "iic/SenseVoiceSmall")
+
+
+def _sensevoice_vad_model() -> str:
+    return model_reference(
+        "fsmn-vad", "iic/speech_fsmn_vad_zh-cn-16k-common-pytorch"
+    )
 
 
 @dataclass(frozen=True, slots=True)
@@ -12,7 +23,8 @@ class HighRecallConfig:
     merge_gap: float = 0.15
     min_silence_duration: float = 0.50
     min_keep_duration: float = 0.0
-    sensevoice_model: str = "iic/SenseVoiceSmall"
+    sensevoice_model: str = field(default_factory=_sensevoice_model)
+    sensevoice_vad_model: str = field(default_factory=_sensevoice_vad_model)
     sensevoice_device: str = "cuda:0"
     sensevoice_language: str = "ja"
     sensevoice_end_silence_ms: int = 200
@@ -20,8 +32,8 @@ class HighRecallConfig:
 
     def __post_init__(self) -> None:
         self.silence_config()
-        if not self.sensevoice_model or not self.sensevoice_device:
-            raise ValueError("SenseVoice model and device must not be empty")
+        if not self.sensevoice_model or not self.sensevoice_vad_model or not self.sensevoice_device:
+            raise ValueError("SenseVoice model, VAD model and device must not be empty")
 
     def silence_config(self) -> SilenceCutterConfig:
         return SilenceCutterConfig(

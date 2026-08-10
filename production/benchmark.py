@@ -77,9 +77,14 @@ Parallel detector median: {comparison['parallel_detector_median']:.3f}s. Sequent
 
 ## Safety and regression
 
-- Known Whisper gaps: {full['known_whisper_gap_count']}
-- Protected by union: {full['protected_by_union_count']}
-- Still unprotected: {full['still_unprotected_count']}
+- Known gaps (total): {full['known_gap_count_total']}
+- Known gaps (inside content): {full['known_gap_count_inside_content']}
+- Removed by intro: {full['known_gap_count_removed_by_intro']}
+- Removed by outro: {full['known_gap_count_removed_by_outro']}
+- Protected inside content: {full['protected_inside_content']}
+- Fully protected inside content: {full['fully_protected_inside_content']}
+- Partially protected inside content: {full['partially_protected_inside_content']}
+- Still unprotected inside content: {full['still_unprotected_inside_content']}
 - Whisper model loaded: NO
 - Fun-ASR-Nano model loaded: NO
 - SRT generated: NO
@@ -117,7 +122,7 @@ def run_benchmark(
     passed = (
         warm["total_time"] <= 10
         and full["total_time"] <= 120
-        and full["still_unprotected_count"] == 0
+        and full["still_unprotected_inside_content"] == 0
         and comparison["chosen_default"] == "parallel"
         and "passed" in tests.lower()
     )

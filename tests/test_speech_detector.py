@@ -2,7 +2,7 @@ import unittest
 import json
 import tempfile
 from pathlib import Path
-from unittest.mock import patch
+from unittest.mock import Mock, call, patch
 
 from speech_detector.config import HighRecallConfig
 from speech_detector.fusion import (
@@ -20,13 +20,41 @@ def interval(start, end, source="silero"):
 
 
 class SpeechFusionTests(unittest.TestCase):
-    def test_coarse_asr_chunk_does_not_replace_fine_vad_timeline(self):
+    def test_sensevoice_cuda_load_failure_falls_back_to_cpu_only(self):
+        cpu_model = Mock()
+        detector = SenseVoiceDetector(HighRecallConfig())
+        with patch.object(
+            detector, "_create_model",
+            side_effect=[RuntimeError("CUDA out of memory"), cpu_model],
+        ) as create:
+            self.assertIs(detector._load(), cpu_model)
+        self.assertEqual(create.call_args_list, [call("cuda:0"), call("cpu")])
+        self.assertEqual(detector.active_device, "cpu")
+        self.assertTrue(detector.cuda_fallback)
+        self.assertIn("out of memory", detector.cuda_error)
+
+    def test_sensevoice_cuda_inference_failure_retries_on_cpu(self):
+        cuda_model = Mock()
+        cuda_model.vad_model = object()
+        cuda_model.vad_kwargs = {}
+        cuda_model.inference.side_effect = RuntimeError("CUDA runtime failure")
+        cpu_model = Mock()
+        cpu_model.vad_model = object()
+        cpu_model.vad_kwargs = {}
+        cpu_model.inference.return_value = [{"value": [[100, 800]]}]
+        detector = SenseVoiceDetector(HighRecallConfig())
+        detector._model = cuda_model
+        with patch.object(detector, "_create_model", return_value=cpu_model) as create:
+            intervals, _elapsed, diagnostics = detector.detect(Path("audio.wav"), 1)
+        create.assert_called_once_with("cpu")
+        self.assertEqual([(item.start, item.end) for item in intervals], [(0.1, 0.8)])
+        self.assertEqual(diagnostics["sensevoice_active_device"], "cpu")
+        self.assertTrue(diagnostics["sensevoice_cuda_fallback"])
+
+    def test_sensevoice_uses_fine_vad_without_redundant_asr(self):
         model = unittest.mock.Mock()
         model.vad_model = object()
         model.vad_kwargs = {}
-        model.generate.return_value = [
-            {"sentence_info": [{"start": 0, "end": 5000}]}
-        ]
         model.inference.return_value = [
             {"value": [[0, 1000], [1700, 2500], [3700, 5000]]}
         ]
@@ -39,9 +67,10 @@ class SpeechFusionTests(unittest.TestCase):
             [(item.start, item.end) for item in fine],
             [(0, 1), (1.7, 2.5), (3.7, 5)],
         )
-        self.assertEqual(diagnostics["sensevoice_raw_asr_segment_count"], 1)
+        model.generate.assert_not_called()
+        self.assertEqual(diagnostics["sensevoice_raw_asr_segment_count"], 0)
         self.assertEqual(diagnostics["sensevoice_fine_speech_interval_count"], 3)
-        self.assertEqual(diagnostics["largest_sensevoice_asr_segment"], 5)
+        self.assertEqual(diagnostics["largest_sensevoice_asr_segment"], 0)
         self.assertAlmostEqual(
             diagnostics["largest_sensevoice_fine_speech_interval"], 1.3
         )
@@ -64,6 +93,34 @@ class SpeechFusionTests(unittest.TestCase):
         self.assertEqual(metrics["fully_protected_by_union_count"], 0)
         self.assertEqual(metrics["partially_protected_by_union_count"], 1)
         self.assertEqual(metrics["still_unprotected_count"], 0)
+
+    def test_known_gap_accounting_uses_effective_content_window(self):
+        gaps = {
+            "gaps": [
+                {"start": 0.5, "end": 1.0},
+                {"start": 2.0, "end": 3.0},
+                {"start": 4.0, "end": 5.0},
+                {"start": 9.0, "end": 10.0},
+            ]
+        }
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / "gaps.json"
+            path.write_text(json.dumps(gaps))
+            metrics = known_gap_metrics(
+                path,
+                [],
+                [],
+                [{"start": 2.5, "end": 8.0}],
+                content_start=2.5,
+                content_end=8.0,
+            )
+        self.assertEqual(metrics["known_gap_count_total"], 4)
+        self.assertEqual(metrics["known_gap_count_inside_content"], 2)
+        self.assertEqual(metrics["known_gap_count_removed_by_intro"], 1)
+        self.assertEqual(metrics["known_gap_count_removed_by_outro"], 1)
+        self.assertEqual(metrics["protected_inside_content"], 2)
+        self.assertEqual(metrics["fully_protected_inside_content"], 2)
+        self.assertEqual(metrics["still_unprotected_inside_content"], 0)
 
     @patch("speech_detector.silero_detector.detect_speech", return_value=[])
     def test_silero_wrapper_does_not_add_timing_padding(self, detect):

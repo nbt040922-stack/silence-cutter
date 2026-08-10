@@ -1,0 +1,114 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <meta name="color-scheme" content="dark" />
+    <title>Silence Cutter</title>
+    <script type="module" src="/src/main.js"></script>
+  </head>
+  <body>
+    <div class="app-shell">
+      <header class="topbar">
+        <div>
+          <p class="eyebrow">PRODUCTION BATCH QUEUE</p>
+          <h1>Silence Cutter</h1>
+        </div>
+        <div class="health" id="health"></div>
+        <button class="icon-button" id="settingsButton" title="Settings" aria-label="Settings">⚙</button>
+      </header>
+
+      <main>
+        <section class="input-panel panel">
+          <div class="section-heading">
+            <div>
+              <span class="step">01</span>
+              <h2>Paste video links</h2>
+            </div>
+            <span class="hint">One URL per line</span>
+          </div>
+          <textarea id="urlInput" rows="5" spellcheck="false" placeholder="https://...&#10;https://...&#10;https://..."></textarea>
+          <div class="input-actions">
+            <button class="primary" id="addButton">Add to Queue</button>
+            <button class="secondary" id="clearButton">Clear</button>
+            <span id="inputMessage" class="message"></span>
+          </div>
+        </section>
+
+        <section class="queue-panel panel">
+          <div class="section-heading queue-heading">
+            <div>
+              <span class="step">02</span>
+              <h2>Queue</h2>
+              <span class="queue-count" id="queueCount">0 jobs</span>
+            </div>
+            <button class="secondary compact" id="refreshButton">Refresh</button>
+          </div>
+          <div class="table-wrap">
+            <table>
+              <thead>
+                <tr>
+                  <th>Status</th>
+                  <th>Title</th>
+                  <th>Duration</th>
+                  <th>Progress</th>
+                  <th>Elapsed</th>
+                  <th>Actions</th>
+                </tr>
+              </thead>
+              <tbody id="queueBody"></tbody>
+            </table>
+            <div class="empty-state" id="emptyState">
+              <div class="empty-icon">＋</div>
+              <strong>Your queue is empty</strong>
+              <span>Add links above to begin sequential processing.</span>
+            </div>
+          </div>
+        </section>
+      </main>
+
+      <footer>
+        <div><span class="muted">Output</span><strong id="outputFolder">—</strong></div>
+        <div><span class="live-dot"></span><span>Sequential worker · 1 GPU job</span></div>
+      </footer>
+    </div>
+
+    <dialog id="settingsDialog">
+      <form method="dialog" class="dialog-card" id="settingsForm">
+        <div class="dialog-heading">
+          <div><p class="eyebrow">APPLICATION</p><h2>Settings</h2></div>
+          <button class="icon-button" value="cancel" aria-label="Close">×</button>
+        </div>
+        <label>Output folder<input id="outputSetting" type="text" /></label>
+        <label>Workspace folder<input id="workspaceSetting" type="text" /></label>
+        <label>Max concurrent jobs<input type="number" value="1" disabled /></label>
+        <p class="settings-note">Processing is locked to one job to protect GPU throughput.</p>
+        <section class="benchmark-box">
+          <div>
+            <strong>Hardware Benchmark</strong>
+            <p class="settings-note">Runs the fixed production video and records CUDA, NVENC, timings, and timeline identity.</p>
+          </div>
+          <button class="secondary" type="button" id="benchmarkButton">Run Hardware Benchmark</button>
+          <pre id="benchmarkResult" hidden></pre>
+        </section>
+        <div class="dialog-actions">
+          <button class="secondary" value="cancel">Cancel</button>
+          <button class="primary" value="default" id="saveSettingsButton">Save</button>
+        </div>
+      </form>
+    </dialog>
+
+    <dialog id="logDialog">
+      <div class="dialog-card log-card">
+        <div class="dialog-heading">
+          <div><p class="eyebrow">JOB DETAILS</p><h2>Log</h2></div>
+          <button class="icon-button" id="closeLogButton" aria-label="Close">×</button>
+        </div>
+        <pre id="conciseLog">No log entries yet.</pre>
+        <details><summary>Advanced log</summary><pre id="advancedLog"></pre></details>
+      </div>
+    </dialog>
+
+    <div class="toast" id="toast" role="status"></div>
+  </body>
+</html>

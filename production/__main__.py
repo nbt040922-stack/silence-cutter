@@ -4,6 +4,7 @@ import argparse
 import json
 from pathlib import Path
 
+from .content_boundary import BoundaryConfig
 from .pipeline import ProductionRuntime
 
 
@@ -15,6 +16,12 @@ def _parser() -> argparse.ArgumentParser:
     parser.add_argument("--debug", action="store_true")
     parser.add_argument("--report", type=Path)
     parser.add_argument("--known-gaps", type=Path)
+    parser.add_argument("--content-start", type=float)
+    parser.add_argument("--content-end", type=float)
+    parser.add_argument("--keep-intro-outro", action="store_true")
+    parser.add_argument("--intro-search-window", type=float, default=120.0)
+    parser.add_argument("--outro-search-window", type=float, default=60.0)
+    parser.add_argument("--post-intro-trim", type=float, default=2.0)
     return parser
 
 
@@ -27,6 +34,14 @@ def main() -> None:
         debug=args.debug,
         report_path=args.report,
         known_gap_path=args.known_gaps,
+        content_start=args.content_start,
+        content_end=args.content_end,
+        keep_intro_outro=args.keep_intro_outro,
+        boundary_config=BoundaryConfig(
+            intro_search_window=args.intro_search_window,
+            outro_search_window=args.outro_search_window,
+            post_intro_trim=args.post_intro_trim,
+        ),
     )
     print(json.dumps(result, indent=2))
 

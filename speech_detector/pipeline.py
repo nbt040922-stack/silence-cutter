@@ -25,6 +25,9 @@ def known_gap_metrics(
     silero: list[SpeechInterval],
     sensevoice: list[SpeechInterval],
     final_keep: list[dict[str, float]],
+    *,
+    content_start: float = 0.0,
+    content_end: float | None = None,
 ) -> dict[str, int]:
     if path is None or not path.is_file():
         return {
@@ -35,20 +38,45 @@ def known_gap_metrics(
             "fully_protected_by_union_count": 0,
             "partially_protected_by_union_count": 0,
             "still_unprotected_count": 0,
+            "known_gap_count_total": 0,
+            "known_gap_count_inside_content": 0,
+            "known_gap_count_removed_by_intro": 0,
+            "known_gap_count_removed_by_outro": 0,
+            "protected_inside_content": 0,
+            "fully_protected_inside_content": 0,
+            "partially_protected_inside_content": 0,
+            "still_unprotected_inside_content": 0,
         }
     data = json.loads(path.read_text(encoding="utf-8"))
     gaps = data.get("gaps", data) if isinstance(data, dict) else data
     keeps = [SpeechInterval(item["start"], item["end"], "final_keep") for item in final_keep]
-    silero_count = sensevoice_count = union_count = 0
-    silero_full = sensevoice_full = union_full = 0
+    content_end = float("inf") if content_end is None else content_end
+
+    def coverage(items: list[dict[str, Any]]) -> tuple[int, int, int, int, int, int]:
+        silero_count = sensevoice_count = union_count = 0
+        silero_full = sensevoice_full = union_full = 0
+        for gap in items:
+            start, end = float(gap["start"]), float(gap["end"])
+            silero_count += any(item.start < end and start < item.end for item in silero)
+            sensevoice_count += any(item.start < end and start < item.end for item in sensevoice)
+            union_count += any(item.start < end and start < item.end for item in keeps)
+            silero_full += fully_covered(start, end, silero)
+            sensevoice_full += fully_covered(start, end, sensevoice)
+            union_full += fully_covered(start, end, keeps)
+        return silero_count, sensevoice_count, union_count, silero_full, sensevoice_full, union_full
+
+    silero_count, sensevoice_count, union_count, silero_full, sensevoice_full, union_full = coverage(gaps)
+    inside: list[dict[str, Any]] = []
+    removed_intro = removed_outro = 0
     for gap in gaps:
         start, end = float(gap["start"]), float(gap["end"])
-        silero_count += any(item.start < end and start < item.end for item in silero)
-        sensevoice_count += any(item.start < end and start < item.end for item in sensevoice)
-        union_count += any(item.start < end and start < item.end for item in keeps)
-        silero_full += fully_covered(start, end, silero)
-        sensevoice_full += fully_covered(start, end, sensevoice)
-        union_full += fully_covered(start, end, keeps)
+        if end <= content_start:
+            removed_intro += 1
+        elif start >= content_end:
+            removed_outro += 1
+        else:
+            inside.append({"start": max(start, content_start), "end": min(end, content_end)})
+    _, _, protected_inside, _, _, fully_inside = coverage(inside)
     return {
         "known_whisper_gap_count": len(gaps),
         "protected_by_silero_count": silero_count,
@@ -59,6 +87,14 @@ def known_gap_metrics(
         "fully_protected_by_union_count": union_full,
         "partially_protected_by_union_count": union_count - union_full,
         "still_unprotected_count": len(gaps) - union_count,
+        "known_gap_count_total": len(gaps),
+        "known_gap_count_inside_content": len(inside),
+        "known_gap_count_removed_by_intro": removed_intro,
+        "known_gap_count_removed_by_outro": removed_outro,
+        "protected_inside_content": protected_inside,
+        "fully_protected_inside_content": fully_inside,
+        "partially_protected_inside_content": protected_inside - fully_inside,
+        "still_unprotected_inside_content": len(inside) - protected_inside,
     }
 
 

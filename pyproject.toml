@@ -10,6 +10,7 @@ requires-python = ">=3.10"
 dependencies = [
     "faster-whisper>=1.2,<2",
     "numpy>=1.26",
+    "Pillow>=10,<13",
     "silero-vad>=6,<7",
     "nvidia-cublas-cu12>=12,<13; platform_system == 'Windows'",
     "nvidia-cudnn-cu12>=9,<10; platform_system == 'Windows'",
@@ -18,6 +19,7 @@ dependencies = [
 [project.optional-dependencies]
 dev = ["pytest>=8"]
 high-recall = ["funasr==1.4.1", "modelscope>=1.39", "silero-vad>=6,<7"]
+desktop = ["yt-dlp"]
 
 [project.scripts]
 silence-cutter = "silence_cutter.__main__:main"
@@ -25,6 +27,14 @@ caption-engine = "caption_engine.__main__:main"
 timeline-engine = "timeline_engine.__main__:main"
 speech-detector = "speech_detector.__main__:main"
 silence-cutter-production = "production.__main__:main"
+tiktok-formatter-plan = "formatter.__main__:main"
 
 [tool.setuptools.packages.find]
-include = ["caption_engine*", "silence_cutter*", "timeline_engine*", "speech_detector*", "production*"]
+include = ["backend*", "caption_engine*", "formatter*", "silence_cutter*", "timeline_engine*", "speech_detector*", "production*"]
+
+[tool.setuptools.package-data]
+formatter = ["assets/fonts/*"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+norecursedirs = ["internal_release_rc", ".venv", ".venv_asr_test", "desktop"]
