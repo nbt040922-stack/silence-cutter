@@ -1,0 +1,182 @@
+[
+  {
+    "start": 0.3,
+    "end": 2.5,
+    "duration": 2.2,
+    "whisper": "",
+    "sensevoice": "🎼ど うも、こんちのこと鳥のです。",
+    "funasr": "はい、どうも。",
+    "sensevoice_recovered": true,
+    "funasr_recovered": true
+  },
+  {
+    "start": 25.88,
+    "end": 26.5,
+    "duration": 0.620000000000001,
+    "whisper": "",
+    "sensevoice": "🎼なだ！",
+    "funasr": "など。",
+    "sensevoice_recovered": true,
+    "funasr_recovered": true
+  },
+  {
+    "start": 31.4,
+    "end": 31.7,
+    "duration": 0.3000000000000007,
+    "whisper": "",
+    "sensevoice": "辻じチャンネル！",
+    "funasr": "辻チャンネル",
+    "sensevoice_recovered": true,
+    "funasr_recovered": true
+  },
+  {
+    "start": 33.42,
+    "end": 34.02,
+    "duration": 0.6000000000000014,
+    "whisper": "",
+    "sensevoice": "はい、ということで。",
+    "funasr": "はい、ということで。",
+    "sensevoice_recovered": false,
+    "funasr_recovered": false
+  },
+  {
+    "start": 58.02,
+    "end": 60.22,
+    "duration": 2.1999999999999957,
+    "whisper": "",
+    "sensevoice": "🎼生の友達 は どう なんだろう。",
+    "funasr": "生の友達はどうなんだろう？",
+    "sensevoice_recovered": true,
+    "funasr_recovered": true
+  },
+  {
+    "start": 89.06,
+    "end": 90.36,
+    "duration": 1.2999999999999972,
+    "whisper": "",
+    "sensevoice": "🎼きたの で、これを使 って。",
+    "funasr": "これを使ってみます。",
+    "sensevoice_recovered": true,
+    "funasr_recovered": true
+  },
+  {
+    "start": 110.68,
+    "end": 112.1,
+    "duration": 1.4199999999999875,
+    "whisper": "",
+    "sensevoice": "🎼ったで。",
+    "funasr": "なので。",
+    "sensevoice_recovered": false,
+    "funasr_recovered": true
+  },
+  {
+    "start": 114.1,
+    "end": 121.02000000000001,
+    "duration": 6.920000000000016,
+    "whisper": "",
+    "sensevoice": "🎼多分 ね、その 熱中症から 始まっ たって いう より は、コア が 風邪ひい てて ちょっと。",
+    "funasr": "多分ね。その熱中症から始まったっていうよりはコアが風邪引いててちょっと。",
+    "sensevoice_recovered": true,
+    "funasr_recovered": true
+  },
+  {
+    "start": 134.06,
+    "end": 134.44,
+    "duration": 0.37999999999999545,
+    "whisper": "",
+    "sensevoice": "🎼たんです私。",
+    "funasr": "私や。",
+    "sensevoice_recovered": false,
+    "funasr_recovered": true
+  },
+  {
+    "start": 136.8,
+    "end": 137.14,
+    "duration": 0.339999999999975,
+    "whisper": "",
+    "sensevoice": "🎼で、夜。",
+    "funasr": "で夜。",
+    "sensevoice_recovered": true,
+    "funasr_recovered": true
+  },
+  {
+    "start": 139.76,
+    "end": 140.08,
+    "duration": 0.3200000000000216,
+    "whisper": "",
+    "sensevoice": "🎼怪我して完成。",
+    "funasr": "怪我して。",
+    "sensevoice_recovered": true,
+    "funasr_recovered": true
+  },
+  {
+    "start": 149.4,
+    "end": 150.0,
+    "duration": 0.5999999999999943,
+    "whisper": "",
+    "sensevoice": "🎼いと 思 って。私、あんまり 気。",
+    "funasr": "私あんまり基本。",
+    "sensevoice_recovered": true,
+    "funasr_recovered": true
+  },
+  {
+    "start": 164.0,
+    "end": 164.34,
+    "duration": 0.3400000000000034,
+    "whisper": "",
+    "sensevoice": "🎼来てきてそしたらは。",
+    "funasr": "そしたら。",
+    "sensevoice_recovered": true,
+    "funasr_recovered": false
+  },
+  {
+    "start": 167.84,
+    "end": 168.18,
+    "duration": 0.3400000000000034,
+    "whisper": "",
+    "sensevoice": "🎼思 って 結構 大。",
+    "funasr": "結構大人になって。",
+    "sensevoice_recovered": false,
+    "funasr_recovered": true
+  },
+  {
+    "start": 178.4,
+    "end": 180.0,
+    "duration": 1.5999999999999943,
+    "whisper": "",
+    "sensevoice": "🎼で、その 時 はなん かもう眠。",
+    "funasr": "で、その時はなんかもう眠すぎて",
+    "sensevoice_recovered": true,
+    "funasr_recovered": true
+  },
+  {
+    "start": 183.94,
+    "end": 210.26,
+    "duration": 26.319999999999993,
+    "whisper": "",
+    "sensevoice": "🎼だけど朝起きて繊維のお弁当を作んなきゃいけなかったから 気合でお弁当を作って まジでその時も気持ち悪さもあって 朝でも暑いから 結構なかなか暑さだったんだけど 暑いなって思いながら随分も取らずにお弁当を作ってコォアたち送り出して学校チームを送り出して あまりにもしんどかったからみんなが送り出した後横に。",
+    "funasr": "なんだけど、朝起きてその繊維のお弁当を作んなきゃいけなかったから、気合でお弁当作って、マジでもう本当その時もなんか気持ち悪さもあって、朝でも暑いから結構なかなかあの暑さだったんだけど、暑いなって思いながら、水分も取らずにお弁当を作って、コアたち送り出して、学校チームをね、そう送り出して、あまりにもしんどかったから、みんなが送り出した後、横に。",
+    "sensevoice_recovered": true,
+    "funasr_recovered": true
+  },
+  {
+    "start": 234.82,
+    "end": 240.16000000000003,
+    "duration": 5.340000000000032,
+    "whisper": "",
+    "sensevoice": "🎼ん だ けど、冷ー房 を 入れ てて も すごい ドヨーン と した 厚 さとい うか って いう 感じ だっ た の ねす。",
+    "funasr": "冷房入れててもすごいドヨンとした厚さというかっていう感じだったのね。",
+    "sensevoice_recovered": true,
+    "funasr_recovered": true
+  },
+  {
+    "start": 268.16,
+    "end": 270.0,
+    "duration": 1.839999999999975,
+    "whisper": "",
+    "sensevoice": "🎼たん だ けど、さすが に 私 が 動け なさ すぎ て 泊まり。",
+    "funasr": "さすがに私が動けなさすぎて止まりません。",
+    "sensevoice_recovered": true,
+    "funasr_recovered": true
+  }
+]
