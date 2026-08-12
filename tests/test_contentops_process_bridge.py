@@ -78,6 +78,11 @@ def test_invalid_missing_source_and_unavailable_nas(tmp_path, media):
     bridge.close()
 
 
+def test_bridge_rejects_non_loopback_bind(tmp_path):
+    with pytest.raises(ValueError, match="must bind to 127.0.0.1"):
+        ContentOpsProcessBridge(records_path=tmp_path / "records.json", host="0.0.0.0")
+
+
 def test_production_core_reuses_existing_planner_and_renderer(tmp_path, media):
     source, output = media
     job_dir = tmp_path / "adapter-job"
