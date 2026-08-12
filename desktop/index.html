@@ -15,7 +15,9 @@
           <h1>Silence Cutter</h1>
         </div>
         <div class="health" id="health"></div>
-        <button class="icon-button" id="settingsButton" title="Settings" aria-label="Settings">⚙</button>
+        <div class="topbar-actions">
+          <button class="icon-button" id="settingsButton" title="Settings" aria-label="Settings">⚙</button>
+        </div>
       </header>
 
       <main>
@@ -23,16 +25,28 @@
           <div class="section-heading">
             <div>
               <span class="step">01</span>
-              <h2>Paste video links</h2>
+              <h2>Local video folders</h2>
             </div>
-            <span class="hint">One URL per line</span>
+            <span class="hint">Local folder mode</span>
           </div>
-          <textarea id="urlInput" rows="5" spellcheck="false" placeholder="https://...&#10;https://...&#10;https://..."></textarea>
-          <div class="input-actions">
-            <button class="primary" id="addButton">Add to Queue</button>
-            <button class="secondary" id="clearButton">Clear</button>
+          <div class="folder-grid">
+            <label><span>INPUT FOLDER</span><span class="path-control"><input id="inputFolder" type="text" /><button class="secondary" type="button" id="browseInputButton">Browse</button></span></label>
+            <label><span>OUTPUT FOLDER</span><span class="path-control"><input id="mainOutputFolder" type="text" /><button class="secondary" type="button" id="browseOutputButton">Browse</button></span></label>
+          </div>
+          <div class="local-actions">
+            <label class="watch-toggle"><input id="watchFolder" type="checkbox" /><span>Watch folder automatically</span></label>
+            <button class="primary" id="startProcessingButton">Start Processing</button>
             <span id="inputMessage" class="message"></span>
           </div>
+          <div class="folder-stats" id="folderStats">
+            <span>Detected <b id="detectedCount">0</b></span>
+            <span>Ready <b id="readyCount">0</b></span>
+            <span>Processing <b id="processingCount">0</b></span>
+            <span>Done <b id="doneCount">0</b></span>
+            <span>Needs review <b id="reviewCount">0</b></span>
+            <span>Failed <b id="failedCount">0</b></span>
+          </div>
+          <div class="detected-files" id="detectedFiles"><span>No supported video files detected.</span></div>
         </section>
 
         <section class="queue-panel panel">
@@ -52,7 +66,7 @@
                   <th>Title</th>
                   <th>Duration</th>
                   <th>Progress</th>
-                  <th>Elapsed</th>
+                  <th>Job timer</th>
                   <th>Actions</th>
                 </tr>
               </thead>
@@ -61,10 +75,25 @@
             <div class="empty-state" id="emptyState">
               <div class="empty-icon">＋</div>
               <strong>Your queue is empty</strong>
-              <span>Add links above to begin sequential processing.</span>
+              <span>Add videos to the Input folder, then start processing.</span>
             </div>
           </div>
         </section>
+
+        <details class="advanced-tools" id="advancedTools">
+          <summary>Advanced / Developer Tools</summary>
+          <section class="panel advanced-panel">
+            <div class="section-heading">
+              <div><h2>YouTube downloader</h2><span class="hint">Optional authenticated workflow</span></div>
+              <button class="icon-button profile-button" id="youtubeProfileButton" title="YouTube Profile" aria-label="YouTube Profile" data-state="empty">👤<i></i></button>
+            </div>
+            <textarea id="urlInput" rows="3" spellcheck="false" placeholder="https://..."></textarea>
+            <div class="input-actions">
+              <button class="primary" id="addButton">Add YouTube Job</button>
+              <button class="secondary" id="clearButton">Clear</button>
+            </div>
+          </section>
+        </details>
       </main>
 
       <footer>
@@ -79,10 +108,15 @@
           <div><p class="eyebrow">APPLICATION</p><h2>Settings</h2></div>
           <button class="icon-button" value="cancel" aria-label="Close">×</button>
         </div>
+        <label>Input folder<input id="inputSetting" type="text" /></label>
         <label>Output folder<input id="outputSetting" type="text" /></label>
         <label>Workspace folder<input id="workspaceSetting" type="text" /></label>
         <label>Max concurrent jobs<input type="number" value="1" disabled /></label>
         <p class="settings-note">Processing is locked to one job to protect GPU throughput.</p>
+        <label class="checkbox-setting">
+          <input id="keepCleanMasterSetting" type="checkbox" />
+          <span>Keep Clean Master <small>Create an extra cleaned MP4 before formatting.</small></span>
+        </label>
         <section class="benchmark-box">
           <div>
             <strong>Hardware Benchmark</strong>
@@ -96,6 +130,25 @@
           <button class="primary" value="default" id="saveSettingsButton">Save</button>
         </div>
       </form>
+    </dialog>
+
+    <dialog id="youtubeProfileDialog">
+      <div class="dialog-card profile-card">
+        <div class="dialog-heading">
+          <div><p class="eyebrow">ACCOUNT</p><h2>YouTube Profile</h2></div>
+          <button class="icon-button" type="button" id="closeYoutubeProfileButton" aria-label="Close">×</button>
+        </div>
+        <div class="profile-status-row">
+          <span>Status</span><strong id="youtubeLoginStatus">NOT CONFIGURED</strong>
+        </div>
+        <p class="settings-note" id="youtubeLastSessionTest">Session has not been tested.</p>
+        <div class="profile-actions">
+          <button class="primary" type="button" id="youtubeLoginButton">Open Profile</button>
+          <button class="secondary" type="button" id="youtubeTestButton">Test Session</button>
+          <button class="danger-button" type="button" id="youtubeResetButton">Logout / Reset Profile</button>
+        </div>
+        <p class="settings-note">Close the login browser before testing or downloading so Chrome releases its cookie database.</p>
+      </div>
     </dialog>
 
     <dialog id="logDialog">

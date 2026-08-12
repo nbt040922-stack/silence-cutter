@@ -6,4 +6,4 @@ modelscope>=1.39
 silero-vad>=6,<7
 numpy>=1.26
 Pillow>=10,<13
-yt-dlp==2026.7.4
+yt-dlp[default]==2026.8.4.234419.dev0

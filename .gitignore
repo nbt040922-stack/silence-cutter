@@ -37,3 +37,6 @@ hardware_benchmark_run.log
 /format_plan.json
 /pytest.txt
 /latency_benchmark/
+/youtube_browser_profile/
+/youtube_profile/
+/Silence Cutter Local*.exe

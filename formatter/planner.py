@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import itertools
 import math
 import re
 import subprocess
@@ -25,8 +26,8 @@ PART_BANNER = {
     "max_width": 918, "horizontal_padding": 42,
     "vertical_padding": 20, "radius": 30,
 }
-TITLE_VIDEO_GAP = 64
-VIDEO_PART_GAP = 64
+TITLE_VIDEO_GAP = 52
+VIDEO_PART_GAP = 52
 AUTO_FORMAT_MAX_DURATION = 1200.0
 DURATION_POLICY = {
     "preferred_min": 180.0, "preferred_max": 360.0,
@@ -226,10 +227,8 @@ def _banner_geometry(measured_width: int, text_height: int, style: dict[str, int
 def build_layout(title: dict[str, Any], part_label: str) -> dict[str, Any]:
     title_banner = _banner_geometry(
         title["measured_width"], len(title["wrapped_lines"]) * title["line_height"],
-        TITLE_BANNER, TITLE_BANNER["y"],
+        TITLE_BANNER, 0,
     )
-    video = dict(VIDEO_PLACEMENT)
-    video["y"] = title_banner["y"] + title_banner["height"] + TITLE_VIDEO_GAP
     language = title["language"]
     part_path, part_family, part_variable = _font_for_language(language)
     part_font = _load_font(part_path, 72, bold_variable=part_variable)
@@ -237,9 +236,17 @@ def build_layout(title: dict[str, Any], part_label: str) -> dict[str, Any]:
     part_width = math.ceil(part_font.getlength(part_label))
     part_height = part_bbox[3] - part_bbox[1]
     part_banner = _banner_geometry(
-        part_width, part_height, PART_BANNER,
-        video["y"] + video["height"] + VIDEO_PART_GAP,
+        part_width, part_height, PART_BANNER, 0,
     )
+    content_block_height = (
+        title_banner["height"] + TITLE_VIDEO_GAP + VIDEO_PLACEMENT["height"]
+        + VIDEO_PART_GAP + part_banner["height"]
+    )
+    content_block_y = (CANVAS["height"] - content_block_height) // 2
+    title_banner["y"] = content_block_y
+    video = dict(VIDEO_PLACEMENT)
+    video["y"] = title_banner["y"] + title_banner["height"] + TITLE_VIDEO_GAP
+    part_banner["y"] = video["y"] + video["height"] + VIDEO_PART_GAP
     return {
         "canvas": CANVAS,
         "video_placement": video,
@@ -253,6 +260,12 @@ def build_layout(title: dict[str, Any], part_label: str) -> dict[str, Any]:
             "bbox_top": part_bbox[1],
             "measured_width": part_width,
             "measured_height": part_height,
+        },
+        "content_block": {
+            "y": content_block_y,
+            "height": content_block_height,
+            "title_to_video_gap": TITLE_VIDEO_GAP,
+            "video_to_part_gap": VIDEO_PART_GAP,
         },
         "stretch": False,
     }
@@ -292,10 +305,26 @@ def _clean_at(source_time: float, segments: list[dict[str, float]]) -> float | N
     return None
 
 
+def clean_mapping(keep_intervals: list[dict[str, float]]) -> list[dict[str, float]]:
+    cursor = 0.0
+    mapping = []
+    for interval in keep_intervals:
+        start, end = float(interval["start"]), float(interval["end"])
+        duration = end - start
+        if duration <= 0:
+            continue
+        mapping.append({
+            "output_start": cursor, "output_end": cursor + duration,
+            "source_start": start, "source_end": end,
+        })
+        cursor += duration
+    return mapping
+
+
 def _junction_candidates(
-    clean_duration: float, segments: list[dict[str, float]]
+    clean_duration: float, segments: list[dict[str, float]], part_count: int,
 ) -> list[dict[str, Any]]:
-    targets = (clean_duration / 3, clean_duration * 2 / 3)
+    targets = tuple(clean_duration * index / part_count for index in range(1, part_count))
     candidates = []
     for index, (left, right) in enumerate(zip(segments, segments[1:]), start=1):
         clean_time = float(left["output_end"])
@@ -322,10 +351,11 @@ def _junction_candidates(
 
 
 def _fallback_candidates(
-    clean_duration: float, segments: list[dict[str, float]]
+    clean_duration: float, segments: list[dict[str, float]], part_count: int,
 ) -> list[dict[str, Any]]:
     candidates = []
-    for index, clean_time in enumerate((clean_duration / 3, clean_duration * 2 / 3), start=1):
+    for index in range(1, part_count):
+        clean_time = clean_duration * index / part_count
         candidates.append({
             "id": f"fallback_{index}",
             "type": "fallback_frame_boundary",
@@ -346,9 +376,10 @@ def _speech_pause_candidates(
     clean_duration: float,
     segments: list[dict[str, float]],
     speech_intervals: list[dict[str, float]],
+    part_count: int,
 ) -> list[dict[str, Any]]:
     """Map already-detected speech gaps into the clean timeline."""
-    targets = (clean_duration / 3, clean_duration * 2 / 3)
+    targets = tuple(clean_duration * index / part_count for index in range(1, part_count))
     intervals = sorted(speech_intervals, key=lambda item: item["start"])
     candidates = []
     for index, (left, right) in enumerate(zip(intervals, intervals[1:]), start=1):
@@ -384,38 +415,47 @@ def plan_parts(
     clean_duration: float,
     render_segments: list[dict[str, float]],
     speech_intervals: list[dict[str, float]] | None = None,
+    part_count: int | None = None,
 ) -> tuple[list[dict[str, Any]], list[dict[str, Any]]]:
     if clean_duration <= 0:
         raise ValueError("clean video duration must be positive")
+    part_count = part_count or (2 if clean_duration < 600 else 3)
+    if part_count not in {2, 3}:
+        raise ValueError("formatter part count must be 2 or 3")
     segments = sorted(render_segments, key=lambda item: item["output_start"])
-    candidates = _junction_candidates(clean_duration, segments)
+    candidates = _junction_candidates(clean_duration, segments, part_count)
     if speech_intervals:
         candidates.extend(
-            _speech_pause_candidates(clean_duration, segments, speech_intervals)
-        )
-    candidates.extend(_fallback_candidates(clean_duration, segments))
-    candidates.sort(key=lambda item: item["clean_timestamp"])
-    ideal = clean_duration / 3
-    best: tuple[float, int, int] | None = None
-    for first in range(len(candidates) - 1):
-        for second in range(first + 1, len(candidates)):
-            left, right = candidates[first], candidates[second]
-            a, b = left["clean_timestamp"], right["clean_timestamp"]
-            if not 0 < a < b < clean_duration:
-                continue
-            durations = (a, b - a, clean_duration - b)
-            duration_penalty = sum(_outside_soft_range(value) for value in durations)
-            balance_penalty = sum(abs(value - ideal) for value in durations) / 60
-            pair_score = (
-                float(left["natural_score"]) + float(right["natural_score"])
-                - duration_penalty - balance_penalty
+            _speech_pause_candidates(
+                clean_duration, segments, speech_intervals, part_count
             )
-            if best is None or pair_score > best[0]:
-                best = pair_score, first, second
+        )
+    candidates.extend(_fallback_candidates(clean_duration, segments, part_count))
+    candidates.sort(key=lambda item: item["clean_timestamp"])
+    ideal = clean_duration / part_count
+    best: tuple[float, tuple[int, ...]] | None = None
+    for indexes in itertools.combinations(range(len(candidates)), part_count - 1):
+        times = [float(candidates[index]["clean_timestamp"]) for index in indexes]
+        if not all(0 < value < clean_duration for value in times):
+            continue
+        boundaries = [0.0, *times, float(clean_duration)]
+        durations = [right - left for left, right in zip(boundaries, boundaries[1:])]
+        if any(duration <= 0 for duration in durations):
+            continue
+        score = (
+            sum(float(candidates[index]["natural_score"]) for index in indexes)
+            - sum(_outside_soft_range(value) for value in durations)
+            - sum(abs(value - ideal) for value in durations) / 60
+        )
+        if best is None or score > best[0]:
+            best = score, indexes
     if best is None:
-        raise ValueError("could not create three ordered parts")
-    _, first, second = best
-    selected = {first: 1, second: 2}
+        raise ValueError(f"could not create {part_count} ordered parts")
+    _, selected_indexes = best
+    selected = {
+        candidate_index: boundary_index
+        for boundary_index, candidate_index in enumerate(selected_indexes, start=1)
+    }
     for index, candidate in enumerate(candidates):
         if index in selected:
             candidate["selected"] = True
@@ -434,12 +474,9 @@ def plan_parts(
         else:
             candidate["reason"] = "rejected: lower joint natural-boundary/duration score"
         candidate.pop("natural_score", None)
-    boundaries = [
-        0.0,
-        float(candidates[first]["clean_timestamp"]),
-        float(candidates[second]["clean_timestamp"]),
-        float(clean_duration),
-    ]
+    boundaries = [0.0] + [
+        float(candidates[index]["clean_timestamp"]) for index in selected_indexes
+    ] + [float(clean_duration)]
     parts = [
         {
             "index": index + 1,
@@ -448,7 +485,7 @@ def plan_parts(
             "clean_end": boundaries[index + 1],
             "duration": boundaries[index + 1] - boundaries[index],
         }
-        for index in range(3)
+        for index in range(part_count)
     ]
     return parts, candidates
 
@@ -469,16 +506,25 @@ def plan_done_job(
     report_path = Path(job.get("report_path") or job_dir / "pipeline_report.json")
     report = _read_json(report_path)
     clean_video = job_dir / "rendered.mp4"
-    if not clean_video.is_file():
-        clean_video = Path(job["output_path"])
-    if not clean_video.is_file():
-        raise FileNotFoundError("DONE job clean video is missing")
+    if not clean_video.is_file() and job.get("output_path"):
+        candidate = Path(job["output_path"])
+        if candidate.is_file() and candidate.name == "clean_master.mp4":
+            clean_video = candidate
+    source_video = Path(str(job.get("source_path") or ""))
+    if not clean_video.is_file() and not source_video.is_file():
+        raise FileNotFoundError("DONE job source and clean video are missing")
     debug = report.get("debug") or {}
-    render_segments = (debug.get("render") or {}).get("segments") or []
+    keep_intervals = debug.get("keep_intervals") or report.get("keep_intervals") or []
+    render_segments = (
+        (debug.get("render") or {}).get("segments") or clean_mapping(keep_intervals)
+    )
     if not render_segments:
         raise ValueError("pipeline report contains no final render timeline mapping")
-    clean_duration = float(report["output_duration"])
+    clean_duration = float(
+        report.get("output_duration") or report["expected_output_duration"]
+    )
     status = formatter_status(clean_duration, format_anyway)
+    part_count = 2 if clean_duration < 600 else 3
     title = fit_title(str(job["title"]), TITLE_BANNER)
     part_label_template = PART_LABELS[title["language"]]
     target = Path(output_path).expanduser().resolve()
@@ -487,11 +533,15 @@ def plan_done_job(
         plan = {
             "schema_version": 2,
             "formatter_status": status,
+            "part_count": part_count,
             "auto_format_eligible": False,
             "format_anyway": False,
             "source_job_id": job.get("id"),
             "source_job_path": str(job_file),
-            "clean_video_path": str(clean_video),
+            "clean_video_path": str(clean_video) if clean_video.is_file() else None,
+            "source_video_path": str(source_video) if source_video.is_file() else None,
+            "direct_source_render": not clean_video.is_file(),
+            "render_segments": render_segments,
             "clean_video_duration": clean_duration,
             "auto_format_max_duration": AUTO_FORMAT_MAX_DURATION,
             "duration_policy": DURATION_POLICY,
@@ -507,8 +557,11 @@ def plan_done_job(
         )
         return plan
     speech_intervals = debug.get("union_intervals") or []
-    parts, candidates = plan_parts(clean_duration, render_segments, speech_intervals)
-    width, height = probe_video_geometry(clean_video)
+    parts, candidates = plan_parts(
+        clean_duration, render_segments, speech_intervals, part_count
+    )
+    geometry_source = clean_video if clean_video.is_file() else source_video
+    width, height = probe_video_geometry(geometry_source)
     for part in parts:
         part["label"] = part_label_template.format(number=part["index"])
     layout = build_layout(title, parts[0]["label"])
@@ -519,13 +572,18 @@ def plan_done_job(
     plan = {
         "schema_version": 2,
         "formatter_status": status,
+        "part_count": part_count,
         "auto_format_eligible": clean_duration <= AUTO_FORMAT_MAX_DURATION,
         "format_anyway": bool(format_anyway),
         "auto_format_max_duration": AUTO_FORMAT_MAX_DURATION,
         "duration_policy": DURATION_POLICY,
         "source_job_id": job.get("id"),
         "source_job_path": str(job_file),
-        "clean_video_path": str(clean_video),
+        "clean_video_path": str(clean_video) if clean_video.is_file() else None,
+        "source_video_path": str(source_video) if source_video.is_file() else None,
+        "direct_source_render": not clean_video.is_file(),
+        "render_segments": render_segments,
+        "input_duration": report.get("input_duration"),
         "clean_video_duration": clean_duration,
         "part_boundaries": selected_boundaries,
         "parts": parts,

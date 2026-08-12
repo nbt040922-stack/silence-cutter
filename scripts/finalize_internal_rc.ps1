@@ -6,8 +6,9 @@ $runtime = Join-Path $payload "resources\runtime\python"
 $bin = Join-Path $payload "resources\bin"
 $models = Join-Path $payload "resources\models"
 
-& (Join-Path $runtime "python.exe") -c "import torch, funasr, silero_vad, yt_dlp; print(torch.__version__)"
+& (Join-Path $runtime "python.exe") -c "import torch, funasr, silero_vad, yt_dlp, yt_dlp_ejs; print(torch.__version__); print(yt_dlp.version.__version__)"
 & (Join-Path $bin "ffmpeg.exe") -version | Select-Object -First 1
+& (Join-Path $bin "deno.exe") --version | Select-Object -First 1
 
 $critical = @(
     (Join-Path $payload "Silence Cutter.exe"),
@@ -18,6 +19,7 @@ $critical = @(
     (Join-Path $runtime "Lib\site-packages\torch\lib\torch_cpu.dll"),
     (Join-Path $bin "ffmpeg.exe"),
     (Join-Path $bin "ffprobe.exe"),
+    (Join-Path $bin "deno.exe"),
     (Join-Path $payload "resources\benchmark\hardware_benchmark.mp4")
 )
 $critical += Get-ChildItem -LiteralPath $models -Recurse -File | Select-Object -ExpandProperty FullName

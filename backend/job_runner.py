@@ -17,6 +17,7 @@ from datetime import datetime, timezone
 from concurrent.futures import Future, ThreadPoolExecutor
 from dataclasses import dataclass
 from pathlib import Path
+from statistics import median
 from typing import Any, Callable
 from urllib.parse import urlparse
 
@@ -52,6 +53,8 @@ class DownloaderManagerConfig:
 
 TRANSIENT_BACKOFF = (30.0, 60.0, 120.0)
 HTTP_429_BACKOFF = (60.0, 120.0, 300.0)
+AUTH_FAILURE_CODES = {"HTTP_403", "AUTH_REQUIRED", "BOT_CHALLENGE_OR_TOKEN"}
+SUPPORTED_LOCAL_VIDEO_EXTENSIONS = {".mp4", ".mkv", ".mov", ".webm", ".m4v"}
 
 
 def _utf8_environment() -> dict[str, str]:
@@ -94,7 +97,11 @@ def default_settings() -> dict[str, Any]:
     data_root = Path(os.environ.get("SILENCE_CUTTER_DATA_DIR", ROOT)).expanduser().resolve()
     return {
         "workspace_folder": str((data_root / "workspace").resolve()),
-        "output_folder": str((data_root / "outputs").resolve()),
+        "input_folder": str(Path("D:/Vlog/Input").resolve()),
+        "output_folder": str(Path("D:/Vlog/Output").resolve()),
+        "input_mode": "LOCAL_FOLDER",
+        "watch_input_folder": False,
+        "local_file_stability_seconds": 7.0,
         "max_concurrent_jobs": 1,
         "download_concurrency": 1,
         "process_concurrency": 1,
@@ -102,6 +109,10 @@ def default_settings() -> dict[str, Any]:
         "download_cooldown_min_seconds": 55,
         "download_cooldown_max_seconds": 70,
         "max_download_retries": 3,
+        "keep_clean_master": False,
+        "youtube_profile_path": str((SETTINGS_PATH.parent / "youtube_profile").resolve()),
+        "last_session_test": None,
+        "last_session_status": None,
     }
 
 
@@ -114,19 +125,31 @@ def load_settings() -> dict[str, Any]:
         except (OSError, ValueError, TypeError):
             pass
     settings["max_concurrent_jobs"] = 1
+    settings["input_mode"] = "LOCAL_FOLDER"
+    settings["youtube_profile_path"] = str(
+        (SETTINGS_PATH.parent / "youtube_profile").resolve()
+    )
     settings.update(download_concurrency=1, process_concurrency=1, prefetch_depth=1)
     return settings
 
 
 def save_settings(payload: dict[str, Any]) -> dict[str, Any]:
     settings = load_settings()
-    for key in ("workspace_folder", "output_folder"):
+    for key in ("workspace_folder", "input_folder", "output_folder"):
         value = str(payload.get(key, "")).strip()
         if value:
             settings[key] = str(Path(value).expanduser().resolve())
     settings["max_concurrent_jobs"] = 1
+    settings["keep_clean_master"] = bool(payload.get(
+        "keep_clean_master", settings["keep_clean_master"]
+    ))
+    settings["input_mode"] = "LOCAL_FOLDER"
+    settings["watch_input_folder"] = bool(payload.get(
+        "watch_input_folder", settings["watch_input_folder"]
+    ))
     settings.update(download_concurrency=1, process_concurrency=1, prefetch_depth=1)
     Path(settings["workspace_folder"]).mkdir(parents=True, exist_ok=True)
+    Path(settings["input_folder"]).mkdir(parents=True, exist_ok=True)
     Path(settings["output_folder"]).mkdir(parents=True, exist_ok=True)
     _atomic_json(SETTINGS_PATH, settings)
     return settings
@@ -153,13 +176,420 @@ def _read_job(path: Path) -> dict[str, Any]:
     raise AssertionError("unreachable")
 
 
+def _timestamp(value: str | None) -> float | None:
+    if not value:
+        return None
+    try:
+        return datetime.fromisoformat(value.replace("Z", "+00:00")).timestamp()
+    except (TypeError, ValueError):
+        return None
+
+
+def _seconds_between(start: str | None, end: str | None) -> float | None:
+    first, last = _timestamp(start), _timestamp(end)
+    return max(0.0, last - first) if first is not None and last is not None else None
+
+
+def _read_jobs_raw(settings: dict[str, Any] | None = None) -> list[dict[str, Any]]:
+    jobs = []
+    for path in _jobs_dir(settings).glob("*/job.json"):
+        try:
+            jobs.append(_read_job(path))
+        except (OSError, ValueError, TypeError):
+            continue
+    return jobs
+
+
+def _analysis_measurement(job: dict[str, Any]) -> float | None:
+    if job.get("analysis_time") is not None:
+        return float(job["analysis_time"])
+    report = Path(str(job.get("report_path") or ""))
+    if report.is_file():
+        try:
+            value = json.loads(report.read_text(encoding="utf-8")).get("analysis_time")
+            return float(value) if value is not None else None
+        except (OSError, TypeError, ValueError):
+            pass
+    return None
+
+
+def _eta_history(jobs: list[dict[str, Any]], limit: int = 8) -> dict[str, float | None]:
+    completed = sorted(
+        (job for job in jobs if job.get("status") == "DONE" and job.get("finished_at")),
+        key=lambda item: item.get("finished_at") or "", reverse=True,
+    )[:limit]
+    analysis_rates = []
+    formatter_speeds = []
+    for job in completed:
+        duration = float(job.get("duration") or 0)
+        analysis = _analysis_measurement(job)
+        if duration > 0 and analysis is not None and analysis > 0:
+            analysis_rates.append(analysis / (duration / 60.0))
+        speed = float(job.get("average_render_speed") or 0)
+        if speed > 0 and job.get("formatter_status") == "DONE":
+            formatter_speeds.append(speed)
+    return {
+        "analysis_seconds_per_video_minute": (
+            float(median(analysis_rates)) if analysis_rates else None
+        ),
+        "formatter_render_speed_x": (
+            float(median(formatter_speeds)) if formatter_speeds else None
+        ),
+    }
+
+
+def _eta_snapshot(
+    job: dict[str, Any], history: dict[str, float | None], *, now: float | None = None,
+) -> dict[str, Any]:
+    now = time.time() if now is None else now
+    started = _timestamp(job.get("started_at"))
+    finished = _timestamp(job.get("finished_at"))
+    elapsed = max(0.0, (finished or now) - started) if started is not None else 0.0
+    formatter_status = job.get("formatter_status")
+    if formatter_status == "NEEDS_REVIEW":
+        eta, eta_status, progress = None, "NOT_APPLICABLE", 100.0
+    elif finished is not None and job.get("status") == "DONE" and formatter_status in {None, "DONE"}:
+        eta, eta_status, progress = 0.0, "DONE", 100.0
+    elif finished is not None and job.get("status") in TERMINAL:
+        eta, eta_status = None, "NOT_APPLICABLE"
+        progress = float(job.get("overall_progress") or 0)
+    else:
+        eta = None
+        duration = float(job.get("duration") or 0)
+        clean_duration = float(job.get("clean_video_duration") or duration)
+        analysis_rate = history.get("analysis_seconds_per_video_minute")
+        render_speed = history.get("formatter_render_speed_x")
+        analysis_estimate = (
+            duration / 60.0 * analysis_rate if duration > 0 and analysis_rate else None
+        )
+        render_estimate = clean_duration / render_speed if clean_duration > 0 and render_speed else None
+        if formatter_status == "RENDERING":
+            live_eta = job.get("formatter_eta_seconds")
+            if live_eta is not None:
+                eta = max(0.0, float(live_eta))
+            elif render_estimate is not None:
+                rendered = min(1.0, max(0.0, float(job.get("formatter_progress") or 0) / 100.0))
+                eta = render_estimate * (1.0 - rendered)
+        elif formatter_status == "PLANNING" or job.get("stage") == "formatting":
+            eta = render_estimate
+        elif job.get("status") == "ANALYZING":
+            analysis_started = _timestamp(job.get("analysis_started_at")) or now
+            analysis_remaining = (
+                max(0.0, analysis_estimate - (now - analysis_started))
+                if analysis_estimate is not None else None
+            )
+            if analysis_remaining is not None and render_estimate is not None:
+                eta = analysis_remaining + render_estimate
+        elif job.get("status") == "READY":
+            if analysis_estimate is not None and render_estimate is not None:
+                eta = analysis_estimate + render_estimate
+        elif job.get("status") == "DOWNLOADING" and job.get("input_mode") != "LOCAL_FOLDER":
+            progress_value = float(job.get("progress") or 0)
+            download_started = _timestamp(job.get("download_started_at")) or started
+            download_elapsed = max(0.0, now - download_started) if download_started else 0.0
+            if (
+                progress_value >= 5.0 and download_elapsed >= 2.0
+                and analysis_estimate is not None and render_estimate is not None
+            ):
+                download_remaining = max(
+                    0.0, download_elapsed / (progress_value / 100.0) - download_elapsed
+                )
+                eta = download_remaining + analysis_estimate + render_estimate
+        eta_status = "READY" if eta is not None else "ESTIMATING"
+        calculated = elapsed / (elapsed + eta) * 100.0 if eta is not None and elapsed + eta > 0 else 0.0
+        progress = min(99.9, max(float(job.get("overall_progress") or 0), calculated))
+    estimated_total = elapsed + eta if eta is not None else None
+    initial = job.get("estimated_total_time_at_start")
+    if initial is None and estimated_total is not None and eta_status == "READY":
+        initial = estimated_total
+    return {
+        "total_elapsed_seconds": elapsed,
+        "total_eta_seconds": eta,
+        "estimated_total_job_time": estimated_total,
+        "estimated_total_time_at_start": initial,
+        "overall_progress": progress,
+        "total_job_progress": progress,
+        "eta_status": eta_status,
+        **history,
+    }
+
+
 def _write_job(job: dict[str, Any], settings: dict[str, Any] | None = None) -> None:
+    settings = settings or load_settings()
+    job.update(_eta_snapshot(job, _eta_history(_read_jobs_raw(settings))))
     _atomic_json(_job_path(job["id"], settings), job)
+
+
+def _finalize_job(job: dict[str, Any], stage: str) -> dict[str, Any]:
+    finished_at = _now()
+    total_job_time = _seconds_between(job.get("started_at"), finished_at)
+    initial = job.get("estimated_total_time_at_start")
+    job.update(
+        stage=stage,
+        finished_at=finished_at,
+        download_time=job.get("download_time") or _seconds_between(
+            job.get("download_started_at") or job.get("started_at"),
+            job.get("downloaded_at"),
+        ),
+        format_render_time=job.get("total_format_render_time") or job.get("formatter_render_time"),
+        total_job_time=total_job_time,
+        final_estimation_error=(
+            abs(total_job_time - float(initial))
+            if total_job_time is not None and initial is not None else None
+        ),
+    )
+    _write_job(job)
+    report_path = Path(str(job.get("report_path") or ""))
+    if report_path.is_file():
+        try:
+            report = json.loads(report_path.read_text(encoding="utf-8"))
+            report.update({key: job.get(key) for key in (
+                "download_time", "analysis_time", "format_render_time", "total_job_time",
+                "estimated_total_time_at_start", "final_estimation_error",
+            )})
+            _atomic_json(report_path, report)
+        except (OSError, TypeError, ValueError):
+            pass
+    return job
 
 
 def _valid_url(value: str) -> bool:
     parsed = urlparse(value)
     return parsed.scheme in {"http", "https"} and bool(parsed.netloc)
+
+
+def _local_scan_state_path() -> Path:
+    return SETTINGS_PATH.parent / "local-folder-scan.json"
+
+
+def _local_fingerprint(path: Path, size: int, modified_ns: int) -> str:
+    import hashlib
+
+    identity = f"{str(path.resolve()).casefold()}\0{size}\0{modified_ns}"
+    return hashlib.sha256(identity.encode("utf-8")).hexdigest()
+
+
+def _probe_local_media(path: Path) -> float | None:
+    ffprobe = find_executable("ffprobe")
+    if not ffprobe:
+        return None
+    completed = subprocess.run(
+        [
+            ffprobe, "-v", "error", "-show_entries", "format=duration",
+            "-of", "json", str(path),
+        ],
+        capture_output=True, text=True, encoding="utf-8", errors="replace",
+        env=_utf8_environment(),
+    )
+    if completed.returncode:
+        return None
+    try:
+        duration = float(json.loads(completed.stdout)["format"]["duration"])
+    except (KeyError, TypeError, ValueError, json.JSONDecodeError):
+        return None
+    return duration if duration > 0 else None
+
+
+def _local_job_status(job: dict[str, Any]) -> str:
+    formatter_status = job.get("formatter_status")
+    if formatter_status == "NEEDS_REVIEW":
+        return "NEEDS_REVIEW"
+    if formatter_status in {"PLANNING", "RENDERING"} or job.get("stage") == "formatting":
+        return "FORMATTING"
+    status = str(job.get("status") or "FAILED")
+    return {
+        "RENDERING": "FORMATTING",
+        "CANCELLED": "FAILED",
+        "INTERRUPTED": "FAILED",
+    }.get(status, status)
+
+
+def _create_local_job(
+    source: Path, fingerprint: str, duration: float, settings: dict[str, Any],
+) -> dict[str, Any]:
+    job_id = uuid.uuid4().hex
+    job_dir = _jobs_dir(settings) / job_id
+    job_dir.mkdir(parents=True, exist_ok=False)
+    (job_dir / "logs").mkdir()
+    job = {
+        "id": job_id,
+        "input_mode": "LOCAL_FOLDER",
+        "url": None,
+        "title": source.stem,
+        "display_name": source.stem,
+        "duration": duration,
+        "status": "READY",
+        "progress": 100,
+        "stage": "ready",
+        "created_at": _now(),
+        "queue_order": time.time_ns(),
+        "started_at": None,
+        "finished_at": None,
+        "source_path": str(source.resolve()),
+        "original_source_path": str(source.resolve()),
+        "source_fingerprint": fingerprint,
+        "output_path": None,
+        "report_path": None,
+        "formatter_status": None,
+        "formatter_part_count": None,
+        "formatted_outputs": [],
+        "formatter_error": None,
+        "keep_clean_master": bool(settings["keep_clean_master"]),
+        "clean_master_required": None,
+        "clean_master_rendered": False,
+        "error": None,
+        "cancel_requested": False,
+        "pid": None,
+        "download_retry_count": 0,
+        "download_error_code": None,
+        "download_retry_at": None,
+        "download_cooldown_until": None,
+        "download_time": 0.0,
+        "downloaded_at": None,
+        "analysis_time": None,
+        "format_render_time": None,
+        "total_job_time": None,
+        "estimated_total_time_at_start": None,
+        "final_estimation_error": None,
+    }
+    _write_job(job, settings)
+    _log(job_dir, f"Local source queued: {source}")
+    return job
+
+
+def scan_local_folder(
+    *, enqueue: bool = False, now: float | None = None,
+    probe: Callable[[Path], float | None] | None = None,
+) -> dict[str, Any]:
+    settings = load_settings()
+    folder = Path(settings["input_folder"])
+    folder.mkdir(parents=True, exist_ok=True)
+    current_time = time.time() if now is None else now
+    probe = probe or _probe_local_media
+    state_path = _local_scan_state_path()
+    try:
+        observations = json.loads(state_path.read_text(encoding="utf-8"))
+    except (OSError, ValueError, TypeError):
+        observations = {}
+    jobs_by_fingerprint = {
+        str(job.get("source_fingerprint")): job
+        for job in _read_jobs_raw(settings)
+        if job.get("source_fingerprint")
+    }
+    files: list[dict[str, Any]] = []
+    created_count = 0
+    updated_observations: dict[str, Any] = {}
+    for source in sorted(folder.iterdir(), key=lambda item: item.name.casefold()):
+        if not source.is_file() or source.suffix.lower() not in SUPPORTED_LOCAL_VIDEO_EXTENSIONS:
+            continue
+        try:
+            stat = source.stat()
+        except OSError:
+            continue
+        key = str(source.resolve()).casefold()
+        fingerprint = _local_fingerprint(source, stat.st_size, stat.st_mtime_ns)
+        previous = observations.get(key) if isinstance(observations, dict) else None
+        unchanged = bool(
+            isinstance(previous, dict)
+            and previous.get("size") == stat.st_size
+            and previous.get("modified_ns") == stat.st_mtime_ns
+        )
+        stable_since = (
+            float(previous["stable_since"])
+            if unchanged and previous.get("stable_since") is not None
+            else current_time
+        )
+        stable_checks = int(previous.get("stable_checks") or 0) + 1 if unchanged else 1
+        stable = (
+            unchanged and stable_checks >= 2
+            and current_time - stable_since >= float(settings["local_file_stability_seconds"])
+        )
+        duration = previous.get("duration") if unchanged else None
+        probe_ok = bool(previous.get("probe_ok")) if unchanged else False
+        error = None
+        job = jobs_by_fingerprint.get(fingerprint)
+        if job:
+            status = _local_job_status(job)
+            duration = job.get("duration") or duration
+        elif not stable:
+            status = "STABILIZING"
+        else:
+            if not probe_ok:
+                duration = probe(source)
+                probe_ok = duration is not None
+            status = "READY" if probe_ok else "SKIPPED"
+            error = None if probe_ok else "ffprobe could not validate this media file"
+            if enqueue and probe_ok:
+                job = _create_local_job(source, fingerprint, float(duration), settings)
+                jobs_by_fingerprint[fingerprint] = job
+                created_count += 1
+                status = "READY"
+        updated_observations[key] = {
+            "path": str(source.resolve()),
+            "size": stat.st_size,
+            "modified_ns": stat.st_mtime_ns,
+            "stable_since": stable_since,
+            "stable_checks": stable_checks,
+            "probe_ok": probe_ok,
+            "duration": duration,
+            "last_seen": current_time,
+        }
+        files.append({
+            "path": str(source.resolve()),
+            "filename": source.name,
+            "size": stat.st_size,
+            "modified_time": stat.st_mtime,
+            "fingerprint": fingerprint,
+            "duration": duration,
+            "status": status,
+            "job_id": job.get("id") if job else None,
+            "error": error,
+        })
+    _atomic_json(state_path, updated_observations)
+    counts = {
+        "total_files": len(files),
+        "READY": sum(item["status"] == "READY" for item in files),
+        "PROCESSING": sum(
+            item["status"] in {"ANALYZING", "FORMATTING"} for item in files
+        ),
+        "DONE": sum(item["status"] == "DONE" for item in files),
+        "NEEDS_REVIEW": sum(item["status"] == "NEEDS_REVIEW" for item in files),
+        "FAILED": sum(item["status"] == "FAILED" for item in files),
+    }
+    return {
+        "input_folder": str(folder.resolve()),
+        "output_folder": settings["output_folder"],
+        "watch_input_folder": bool(settings["watch_input_folder"]),
+        "files": files,
+        "counts": counts,
+        "enqueued": created_count,
+    }
+
+
+def start_local_processing() -> dict[str, Any]:
+    return scan_local_folder(enqueue=True)
+
+
+def browse_folder(initial_path: str | None = None) -> dict[str, Any]:
+    if os.name != "nt":
+        raise RuntimeError("folder browser is available on Windows only")
+    initial = str(Path(initial_path or "D:/Vlog").expanduser()).replace("'", "''")
+    script = (
+        "Add-Type -AssemblyName System.Windows.Forms;"
+        "$dialog=New-Object System.Windows.Forms.FolderBrowserDialog;"
+        f"$dialog.SelectedPath='{initial}';"
+        "if($dialog.ShowDialog() -eq 'OK'){[Console]::OutputEncoding="
+        "[System.Text.Encoding]::UTF8;Write-Output $dialog.SelectedPath}"
+    )
+    completed = subprocess.run(
+        ["powershell.exe", "-NoProfile", "-STA", "-Command", script],
+        capture_output=True, text=True, encoding="utf-8", errors="replace",
+        creationflags=0x08000000,
+    )
+    if completed.returncode:
+        raise RuntimeError(completed.stderr.strip() or "folder browser failed")
+    selected = completed.stdout.strip()
+    return {"path": str(Path(selected).resolve()) if selected else None}
 
 
 def create_jobs(urls: list[str]) -> list[dict[str, Any]]:
@@ -176,8 +606,10 @@ def create_jobs(urls: list[str]) -> list[dict[str, Any]]:
         (job_dir / "logs").mkdir()
         job = {
             "id": job_id,
+            "input_mode": "YOUTUBE",
             "url": url,
             "title": urlparse(url).netloc or url,
+            "display_name": urlparse(url).netloc or url,
             "duration": None,
             "status": "QUEUED" if _valid_url(url) else "FAILED",
             "progress": 0 if _valid_url(url) else None,
@@ -189,6 +621,13 @@ def create_jobs(urls: list[str]) -> list[dict[str, Any]]:
             "source_path": None,
             "output_path": None,
             "report_path": None,
+            "formatter_status": None,
+            "formatter_part_count": None,
+            "formatted_outputs": [],
+            "formatter_error": None,
+            "keep_clean_master": bool(settings["keep_clean_master"]),
+            "clean_master_required": None,
+            "clean_master_rendered": False,
             "error": None if _valid_url(url) else "URL must use http or https",
             "cancel_requested": False,
             "pid": None,
@@ -196,6 +635,12 @@ def create_jobs(urls: list[str]) -> list[dict[str, Any]]:
             "download_error_code": None,
             "download_retry_at": None,
             "download_cooldown_until": None,
+            "download_time": None,
+            "analysis_time": None,
+            "format_render_time": None,
+            "total_job_time": None,
+            "estimated_total_time_at_start": None,
+            "final_estimation_error": None,
         }
         _write_job(job, settings)
         jobs.append(job)
@@ -203,12 +648,9 @@ def create_jobs(urls: list[str]) -> list[dict[str, Any]]:
 
 
 def list_jobs() -> list[dict[str, Any]]:
-    jobs = []
-    for path in _jobs_dir().glob("*/job.json"):
-        try:
-            jobs.append(_read_job(path))
-        except (OSError, ValueError, TypeError):
-            continue
+    jobs = _read_jobs_raw()
+    history = _eta_history(jobs)
+    jobs = [job | _eta_snapshot(job, history) for job in jobs]
     return sorted(
         jobs,
         key=lambda item: (
@@ -254,13 +696,21 @@ def retry_job(job_id: str) -> dict[str, Any]:
     job = _read_job(_job_path(job_id))
     if job["status"] not in TERMINAL:
         raise ValueError("only finished, failed, cancelled or interrupted jobs can retry")
-    source = _valid_existing_source(_job_path(job_id).parent)
+    local_source = Path(str(job.get("source_path") or ""))
+    source = (
+        local_source if job.get("input_mode") == "LOCAL_FOLDER" and local_source.is_file()
+        else _valid_existing_source(_job_path(job_id).parent)
+    )
     job.update(
         status="READY" if source else "QUEUED",
         stage="ready" if source else "waiting_to_download", progress=100 if source else 0,
         source_path=str(source.resolve()) if source else None, started_at=None,
         finished_at=None, error=None, cancel_requested=False, pid=None,
         download_retry_count=0, download_error_code=None, download_retry_at=None,
+        download_time=None, analysis_time=None, format_render_time=None,
+        total_job_time=None, estimated_total_time_at_start=None,
+        final_estimation_error=None, overall_progress=0.0,
+        download_started_at=None, analysis_started_at=None,
     )
     _write_job(job)
     return job
@@ -307,6 +757,144 @@ def _yt_dlp_command() -> list[str] | None:
     return None
 
 
+def youtube_profile_dir() -> Path:
+    return Path(load_settings()["youtube_profile_path"])
+
+
+def youtube_profile_ready() -> bool:
+    profile = youtube_profile_dir()
+    return profile.is_dir() and any(path.is_file() for path in profile.rglob("*"))
+
+
+def _persist_youtube_settings(**values: Any) -> dict[str, Any]:
+    settings = load_settings()
+    settings.update(values)
+    _atomic_json(SETTINGS_PATH, settings)
+    return settings
+
+
+def youtube_login_status() -> dict[str, Any]:
+    settings = load_settings()
+    jobs = list_jobs()
+    ready = youtube_profile_ready()
+    if not ready:
+        status = "LOGIN REQUIRED"
+    elif any(job.get("stage") == "profile_locked" for job in jobs):
+        status = "PROFILE LOCKED"
+    elif any(job.get("stage") in {"auth_required", "auth_failed"} for job in jobs):
+        status = "LOGIN REQUIRED"
+    elif any(job.get("stage") == "profile_error" for job in jobs):
+        status = "PROFILE ERROR"
+    elif ready and settings.get("last_session_status") in {
+        "PROFILE READY", "LOGIN REQUIRED", "PROFILE ERROR", "PROFILE LOCKED",
+    }:
+        status = settings["last_session_status"]
+    else:
+        status = "PROFILE READY"
+    return {
+        "status": status,
+        "profile_ready": ready,
+        "youtube_profile_path": settings["youtube_profile_path"],
+        "last_session_test": settings.get("last_session_test"),
+        "last_session_status": settings.get("last_session_status"),
+    }
+
+
+def _chrome_executable() -> Path | None:
+    for name in ("chrome", "chrome.exe", "chromium", "chromium.exe"):
+        found = shutil.which(name)
+        if found:
+            return Path(found)
+    roots = [
+        os.environ.get("PROGRAMFILES"), os.environ.get("PROGRAMFILES(X86)"),
+        os.environ.get("LOCALAPPDATA"),
+    ]
+    relative = Path("Google") / "Chrome" / "Application" / "chrome.exe"
+    for root in filter(None, roots):
+        candidate = Path(root) / relative
+        if candidate.is_file():
+            return candidate
+    return None
+
+
+def open_youtube_login() -> dict[str, Any]:
+    chrome = _chrome_executable()
+    if chrome is None:
+        raise RuntimeError("Chrome or Chromium was not found")
+    profile = youtube_profile_dir()
+    profile.mkdir(parents=True, exist_ok=True)
+    subprocess.Popen(
+        [str(chrome), f"--user-data-dir={profile}", "https://www.youtube.com/"],
+        stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
+        creationflags=subprocess.CREATE_NEW_PROCESS_GROUP if os.name == "nt" else 0,
+        start_new_session=os.name != "nt",
+    )
+    _persist_youtube_settings(last_session_test=None, last_session_status=None)
+    return {**youtube_login_status(), "browser_opened": True}
+
+
+def test_youtube_access(url: str | None = None) -> dict[str, Any]:
+    yt = _yt_dlp_command()
+    if not youtube_profile_ready():
+        return {**youtube_login_status(), "status": "LOGIN REQUIRED", "accessible": False}
+    target = (url or "https://www.youtube.com/watch?v=jNQXAC9IVRw").strip()
+    if not _valid_url(target):
+        raise ValueError("session test URL must use http or https")
+    if not yt:
+        status, detail = "YT-DLP ERROR", "yt-dlp was not found"
+        _persist_youtube_settings(last_session_test=_now(), last_session_status=status)
+        return {**youtube_login_status(), "status": status, "accessible": False, "error": detail}
+    try:
+        completed = subprocess.run(
+            [
+                *yt, "--ignore-config", "--cookies-from-browser",
+                f"chrome:{youtube_profile_dir()}", "--simulate", "--no-playlist",
+                "--quiet", target,
+            ],
+            stdout=subprocess.DEVNULL, stderr=subprocess.PIPE,
+            text=True, encoding="utf-8", errors="replace", timeout=90,
+            env=_utf8_environment(),
+        )
+    except (OSError, subprocess.TimeoutExpired) as exc:
+        status, detail = "YT-DLP ERROR", str(exc)
+        _persist_youtube_settings(last_session_test=_now(), last_session_status=status)
+        return {**youtube_login_status(), "status": status, "accessible": False, "error": detail}
+    if completed.returncode == 0:
+        status = "PROFILE READY"
+        _persist_youtube_settings(last_session_test=_now(), last_session_status=status)
+        return {**youtube_login_status(), "status": status, "accessible": True}
+    code = classify_download_error(completed.stderr)
+    status = (
+        "PROFILE LOCKED" if code == "BROWSER_PROFILE_LOCKED"
+        else "LOGIN REQUIRED" if code in AUTH_FAILURE_CODES
+        else "PROFILE ERROR"
+    )
+    detail = _download_error_text(code)
+    _persist_youtube_settings(last_session_test=_now(), last_session_status=status)
+    return {
+        **youtube_login_status(), "status": status, "accessible": False,
+        "error": detail,
+    }
+
+
+def reset_youtube_profile(*, confirmed: bool = False) -> dict[str, Any]:
+    if not confirmed:
+        raise ValueError("explicit confirmation is required to reset the YouTube profile")
+    profile = youtube_profile_dir().resolve()
+    allowed = (SETTINGS_PATH.parent / "youtube_profile").resolve()
+    if profile != allowed:
+        raise RuntimeError("refusing to remove an unexpected browser profile path")
+    if profile.exists():
+        discarded = profile.with_name(f".youtube_profile-reset-{uuid.uuid4().hex}")
+        try:
+            os.replace(profile, discarded)
+        except OSError as exc:
+            raise RuntimeError("Close the YouTube login browser and retry.") from exc
+        shutil.rmtree(discarded)
+    _persist_youtube_settings(last_session_test=None, last_session_status=None)
+    return youtube_login_status()
+
+
 def health() -> dict[str, Any]:
     from backend.hardware import data_dir
 
@@ -343,8 +931,22 @@ def _log(job_dir: Path, message: str) -> None:
 
 
 def _command_log(job_dir: Path, command: list[str]) -> None:
+    redacted = []
+    hide_next = False
+    for argument in command:
+        if hide_next:
+            redacted.append("<redacted>")
+            hide_next = False
+        elif argument.lower() == "--cookies-from-browser":
+            redacted.append("<browser-session>")
+            hide_next = True
+        else:
+            redacted.append(argument)
+            hide_next = argument.lower() in {
+                "--add-header", "--cookies", "--password", "--username",
+            }
     with (job_dir / "logs" / "commands.log").open("a", encoding="utf-8") as stream:
-        stream.write(subprocess.list2cmdline(command) + "\n")
+        stream.write(subprocess.list2cmdline(redacted) + "\n")
 
 
 def _refresh_cancelled(job: dict[str, Any]) -> bool:
@@ -419,19 +1021,23 @@ def _download(job: dict[str, Any], job_dir: Path) -> Path:
     yt = _yt_dlp_command()
     if not yt:
         raise RuntimeError("yt-dlp was not found; install the desktop optional dependencies")
+    authentication = [
+        "--cookies-from-browser", f"chrome:{youtube_profile_dir()}"
+    ]
     metadata_command = [
-        *yt, "--ignore-config", "--dump-single-json", "--skip-download",
+        *yt, "--ignore-config", *authentication, "--dump-single-json", "--skip-download",
         "--no-playlist", job["url"],
     ]
     metadata_lines: list[str] = []
     _run_process(metadata_command, job, job_dir, on_line=metadata_lines.append)
     info = json.loads("\n".join(metadata_lines))
     job["title"] = str(info.get("title") or job["title"])
+    job["display_name"] = job["title"]
     job["duration"] = float(info["duration"]) if info.get("duration") else None
     _write_job(job)
     output_template = str(job_dir / "source.%(ext)s")
     download_command = [
-        *yt, "--ignore-config", "--newline", "--no-playlist", "--progress",
+        *yt, "--ignore-config", *authentication, "--newline", "--no-playlist", "--progress",
         "--progress-template", "download:%(progress._percent_str)s",
         "-f", "bv*+ba/b", "--merge-output-format", "mp4",
         "-o", output_template, job["url"],
@@ -452,7 +1058,6 @@ def _download(job: dict[str, Any], job_dir: Path) -> Path:
     if not sources:
         raise RuntimeError("yt-dlp completed without a source media file")
     return sources[0]
-
 
 def _valid_existing_source(job_dir: Path) -> Path | None:
     ffprobe = find_executable("ffprobe")
@@ -475,8 +1080,21 @@ def _valid_existing_source(job_dir: Path) -> Path | None:
 
 def classify_download_error(message: str) -> str:
     value = message.lower()
+    if any(item in value for item in (
+        "could not copy chrome cookie database",
+        "could not copy chromium cookie database",
+        "failed to copy the cookie database",
+        "cookie database is locked",
+        "database is locked",
+    )):
+        return "BROWSER_PROFILE_LOCKED"
     if re.search(r"(?:http error\s*)?429|too many requests", value):
         return "HTTP_429"
+    if any(item in value for item in (
+        "private video", "video unavailable", "has been removed", "deleted video",
+        "not available", "geo-restricted",
+    )):
+        return "UNAVAILABLE"
     if re.search(r"(?:http error\s*)?403|forbidden", value):
         return "HTTP_403"
     if any(item in value for item in (
@@ -484,7 +1102,8 @@ def classify_download_error(message: str) -> str:
     )):
         return "BOT_CHALLENGE_OR_TOKEN"
     if any(item in value for item in (
-        "sign in", "login required", "private video", "members-only", "confirm your age",
+        "sign in", "login required", "login_required", "authentication required",
+        "members-only", "confirm your age",
     )):
         return "AUTH_REQUIRED"
     if any(item in value for item in (
@@ -512,25 +1131,25 @@ def _process_log_tail(job_dir: Path, start: int = 0, limit: int = 64_000) -> str
 
 def _download_error_text(code: str) -> str:
     return {
+        "BROWSER_PROFILE_LOCKED": "Close the YouTube login browser and retry.",
         "NETWORK_TRANSIENT": "Temporary network failure while downloading",
         "HTTP_429": "YouTube rate limited this machine (HTTP 429)",
-        "HTTP_403": "YouTube refused the anonymous download (HTTP 403)",
-        "AUTH_REQUIRED": "This video requires authentication; anonymous download only in V1",
-        "BOT_CHALLENGE_OR_TOKEN": "YouTube bot/token challenge; automatic retry disabled",
+        "HTTP_403": "YouTube refused the profile download (HTTP 403)",
+        "AUTH_REQUIRED": "YouTube login is required",
+        "BOT_CHALLENGE_OR_TOKEN": "YouTube requires a logged-in browser session",
         "UNAVAILABLE": "Video is unavailable",
         "INVALID_URL": "URL is invalid or unsupported by yt-dlp",
         "UNKNOWN": "yt-dlp failed for an unknown reason",
     }[code]
 
 
-def _sanitize_title(title: str) -> str:
-    value = re.sub(r'[<>:"/\\|?*\x00-\x1f]', "_", title).strip(" .")
-    value = re.sub(r"\s+", " ", value).strip()
+def _sanitize_title(title: str, max_utf16_units: int = 110) -> str:
+    value = re.sub(r'[<>:"/\\|?*\x00-\x1f]', "_", title).rstrip(" .")
     shortened: list[str] = []
     utf16_units = 0
     for character in value:
         character_units = len(character.encode("utf-16-le")) // 2
-        if utf16_units + character_units > 160:
+        if utf16_units + character_units > max_utf16_units:
             break
         shortened.append(character)
         utf16_units += character_units
@@ -546,33 +1165,106 @@ def _sanitize_title(title: str) -> str:
     return value
 
 
-def _unique_output(folder: Path, title: str) -> Path:
-    base = folder / f"{_sanitize_title(title)}_done.mp4"
-    if not base.exists():
-        return base
-    for index in range(2, 10_000):
-        candidate = folder / f"{_sanitize_title(title)}_done_{index}.mp4"
-        if not candidate.exists():
-            return candidate
-    raise RuntimeError("could not allocate a unique output filename")
+def _user_output_folder(folder: Path, title: str, job_id: str) -> Path:
+    destination = folder / f"{_sanitize_title(title)}_{job_id[:8]}"
+    destination.mkdir(parents=True, exist_ok=True)
+    return destination
 
 
-def _pipeline(job: dict[str, Any], job_dir: Path, source: Path) -> tuple[Path, Path]:
+def _pipeline(job: dict[str, Any], job_dir: Path, source: Path) -> tuple[Path | None, Path]:
     rendered = job_dir / "rendered.mp4"
     report = job_dir / "pipeline_report.json"
+    rendered.unlink(missing_ok=True)
     command = [
         sys.executable, "-m", "production", str(source), "-o", str(rendered),
-        "--report", str(report), "--debug",
+        "--report", str(report), "--debug", "--analysis-only",
     ]
-    _run_process(command, job, job_dir, detect_render=True)
-    if not rendered.is_file() or not report.is_file():
-        raise RuntimeError("production pipeline completed without output/report")
-    return rendered, report
+    _run_process(command, job, job_dir)
+    if not report.is_file():
+        raise RuntimeError("production analysis completed without report")
+    return None, report
+
+
+def _render_clean_master_from_report(
+    source: Path, rendered: Path, report_path: Path,
+) -> Path:
+    from silence_cutter.audio import probe_media
+    from silence_cutter.renderer import render_video
+
+    report = json.loads(report_path.read_text(encoding="utf-8"))
+    keep = report.get("keep_intervals") or (report.get("debug") or {}).get("keep_intervals") or []
+    if report.get("no_speech_detected") and not keep:
+        keep = [{"start": 0.0, "end": float(report["input_duration"])}]
+    if not keep:
+        raise RuntimeError("analysis report contains no KEEP timeline")
+    diagnostics: dict[str, Any] = {}
+    started = time.perf_counter()
+    render_video(source, rendered, keep, diagnostics=diagnostics)
+    actual_duration = float(probe_media(rendered)["duration"])
+    expected_duration = sum(float(item["end"]) - float(item["start"]) for item in keep)
+    report.update(
+        output_duration=actual_duration, actual_output_duration=actual_duration,
+        expected_output_duration=expected_duration,
+        duration_error=abs(actual_duration - expected_duration),
+        render_time=time.perf_counter() - started, analysis_only=False,
+        intermediate_render_skipped=False,
+    )
+    report.setdefault("debug", {})["render"] = diagnostics
+    _atomic_json(report_path, report)
+    return rendered
+
+
+def _format_done_job(job_file: Path, *, format_anyway: bool = False) -> dict[str, Any]:
+    job = _read_job(job_file)
+    job.update(
+        formatter_status="PLANNING", formatter_error=None,
+        stage="formatting", finished_at=None,
+    )
+    _write_job(job)
+    try:
+        from formatter.planner import plan_done_job
+        from formatter.renderer import render_format_plan
+
+        plan_path = job_file.parent / "format_plan.json"
+        preview_path = job_file.parent / "part1_preview.png"
+        plan = plan_done_job(
+            job_file, output_path=plan_path, preview_path=preview_path,
+            format_anyway=format_anyway,
+        )
+        if plan["formatter_status"] == "PLANNED":
+            plan = render_format_plan(plan_path)
+            job = _read_job(job_file)
+            job.update(
+                formatter_status=plan["formatter_status"],
+                formatter_error=plan.get("formatter_error"),
+            )
+            _finalize_job(
+                job, "done" if plan["formatter_status"] == "DONE" else "formatter_failed"
+            )
+        else:
+            job = _read_job(job_file)
+            job.update(
+                formatter_status=plan["formatter_status"],
+                formatter_part_count=plan.get("part_count"),
+                format_plan=str(plan_path), formatted_outputs=[],
+                formatter_error=None,
+            )
+            _finalize_job(job, "needs_review")
+        return plan
+    except Exception as exc:
+        job = _read_job(job_file)
+        job.update(formatter_status="FAILED", formatter_error=str(exc))
+        _finalize_job(job, "formatter_failed")
+        _log(job_file.parent, f"Formatter failed: {exc}")
+        return {
+            "formatter_status": "FAILED", "formatted_outputs": [],
+            "formatter_error": str(exc),
+        }
 
 
 def _process_ready_job(
     job: dict[str, Any],
-    *, pipeline: Callable[[dict[str, Any], Path, Path], tuple[Path, Path]] = _pipeline,
+    *, pipeline: Callable[[dict[str, Any], Path, Path], tuple[Path | None, Path]] = _pipeline,
 ) -> dict[str, Any]:
     settings = load_settings()
     job_dir = _job_path(job["id"], settings).parent
@@ -580,20 +1272,60 @@ def _process_ready_job(
     try:
         if not source.is_file():
             raise RuntimeError("downloaded source is missing")
-        job.update(status="ANALYZING", stage="analyzing", progress=None, error=None)
+        analysis_started_at = _now()
+        analysis_wall_started = time.perf_counter()
+        job.update(
+            status="ANALYZING", stage="analyzing", progress=None, error=None,
+            started_at=job.get("started_at") or analysis_started_at,
+            analysis_started_at=analysis_started_at,
+        )
         _write_job(job, settings)
         _log(job_dir, "Production pipeline started")
         rendered, report = pipeline(job, job_dir, source)
+        analysis_time = time.perf_counter() - analysis_wall_started
+        report_data = json.loads(report.read_text(encoding="utf-8"))
+        clean_duration = report_data.get("expected_output_duration")
         outputs = Path(settings["output_folder"])
         outputs.mkdir(parents=True, exist_ok=True)
-        destination = _unique_output(outputs, job["title"])
-        shutil.copy2(rendered, destination)
+        output_folder = _user_output_folder(
+            outputs, str(job.get("display_name") or job["title"]), job["id"]
+        )
+        clean_master_required = bool(rendered) or bool(job.get("keep_clean_master")) or (
+            clean_duration is not None and float(clean_duration) > 1200.0
+        )
+        destination: Path | None = None
+        if clean_master_required:
+            if rendered is None:
+                clean_master_started = time.perf_counter()
+                job.update(
+                    status="RENDERING", stage="rendering_clean_master",
+                    clean_master_render_started_at=_now(),
+                )
+                _write_job(job, settings)
+                rendered = _render_clean_master_from_report(
+                    source, job_dir / "rendered.mp4", report
+                )
+                job["clean_master_render_time"] = time.perf_counter() - clean_master_started
+            destination = output_folder / "clean_master.mp4"
+            shutil.copy2(rendered, destination)
         job.update(
-            status="DONE", stage="done", progress=100, finished_at=_now(),
-            output_path=str(destination.resolve()), report_path=str(report.resolve()), pid=None,
+            status="DONE", stage="formatting", progress=100, finished_at=None,
+            display_name=str(job.get("display_name") or job["title"]),
+            output_folder=str(output_folder.resolve()),
+            output_path=str(destination.resolve()) if destination else None,
+            report_path=str(report.resolve()), pid=None,
+            clean_master_required=clean_master_required,
+            clean_master_rendered=bool(destination),
+            intermediate_render_skipped=not clean_master_required,
+            analysis_time=analysis_time,
+            pipeline_analysis_time=report_data.get("analysis_time"),
+            clean_video_duration=clean_duration,
         )
         _write_job(job, settings)
-        _log(job_dir, f"Done: {destination}")
+        _log(job_dir, f"Analysis done; clean master {'rendered' if destination else 'skipped'}")
+        _log(job_dir, "TikTok formatter planning started")
+        _format_done_job(_job_path(job["id"], settings))
+        job = _read_job(_job_path(job["id"], settings))
     except Exception as exc:
         current = _read_job(_job_path(job["id"], settings))
         cancelled = current.get("cancel_requested") or current["status"] == "CANCELLED"
@@ -633,14 +1365,27 @@ def _download_attempt(
     job.update(
         status="DOWNLOADING", stage="downloading", progress=0,
         started_at=job.get("started_at") or _now(), finished_at=None,
+        download_started_at=job.get("download_started_at") or job.get("started_at") or _now(),
         error=None, cancel_requested=False, download_retry_at=None,
     )
     _write_job(job, settings)
     attempt = int(job.get("download_retry_count") or 0) + 1
-    _log(job_dir, f"Download attempt {attempt} started (anonymous)")
     process_log = job_dir / "logs" / "process.log"
     log_start = process_log.stat().st_size if process_log.is_file() else 0
+    if not youtube_profile_ready():
+        job.update(
+            status="FAILED", stage="auth_required", progress=None, pid=None,
+            finished_at=_now(), download_error_code="AUTH_REQUIRED",
+            download_retry_at=None,
+            error=(
+                "YouTube login required. Open Profile, sign in, then retry this job."
+            ),
+        )
+        _write_job(job, settings)
+        _log(job_dir, "YouTube profile is not configured")
+        return job
     try:
+        _log(job_dir, f"Download attempt {attempt} started (YouTube profile)")
         source = downloader(job, job_dir)
         current = _read_job(path)
         if current.get("cancel_requested") or current["status"] == "CANCELLED":
@@ -649,10 +1394,13 @@ def _download_attempt(
             config.download_cooldown_min_seconds,
             config.download_cooldown_max_seconds,
         )
+        downloaded_at = _now()
         job.update(
             source_path=str(source.resolve()), status="READY", stage="ready", progress=100,
             pid=None, error=None, download_error_code=None, download_retry_at=None,
-            downloaded_at=_now(), download_cooldown_until=clock() + cooldown_seconds,
+            downloaded_at=downloaded_at,
+            download_time=_seconds_between(job.get("download_started_at"), downloaded_at),
+            download_cooldown_until=clock() + cooldown_seconds,
         )
         _write_job(job, settings)
         _log(job_dir, f"Download complete; downloader cooldown {cooldown_seconds:.0f}s")
@@ -662,6 +1410,36 @@ def _download_attempt(
             return current
         detail = f"{exc}\n{_process_log_tail(job_dir, log_start)}"
         code = classify_download_error(detail)
+        if code == "BROWSER_PROFILE_LOCKED":
+            job.update(
+                status="FAILED", stage="profile_locked",
+                progress=None, pid=None,
+                finished_at=_now(), download_error_code=code,
+                download_retry_at=None,
+                error=_download_error_text(code),
+            )
+            _write_job(job, settings)
+            _log(job_dir, "YouTube profile is locked")
+            return job
+        if code in {"AUTH_REQUIRED", "BOT_CHALLENGE_OR_TOKEN"}:
+            job.update(
+                status="FAILED", stage="auth_required", progress=None, pid=None,
+                finished_at=_now(), download_error_code=code,
+                download_retry_at=None,
+                error="YouTube login required. Open Profile, sign in, then retry.",
+            )
+            _write_job(job, settings)
+            _log(job_dir, f"YouTube login required [{code}]")
+            return job
+        if code == "HTTP_403":
+            job.update(
+                status="FAILED", stage="profile_error", progress=None, pid=None,
+                finished_at=_now(), download_error_code=code,
+                download_retry_at=None, error=_download_error_text(code),
+            )
+            _write_job(job, settings)
+            _log(job_dir, "YouTube profile download refused [HTTP_403]")
+            return job
         retry_count = int(job.get("download_retry_count") or 0)
         backoff = HTTP_429_BACKOFF if code == "HTTP_429" else TRANSIENT_BACKOFF
         retryable = code in {"NETWORK_TRANSIENT", "HTTP_429"}
@@ -695,7 +1473,7 @@ class DownloadManager:
         *,
         config: DownloaderManagerConfig | None = None,
         downloader: Callable[[dict[str, Any], Path], Path] = _download,
-        pipeline: Callable[[dict[str, Any], Path, Path], tuple[Path, Path]] = _pipeline,
+        pipeline: Callable[[dict[str, Any], Path, Path], tuple[Path | None, Path]] = _pipeline,
         clock: Callable[[], float] = time.time,
         cooldown: Callable[[float, float], float] = random.uniform,
     ) -> None:
@@ -717,6 +1495,7 @@ class DownloadManager:
         self.process_pool = ThreadPoolExecutor(max_workers=1, thread_name_prefix="process")
         self.download_future: Future[dict[str, Any]] | None = None
         self.process_future: Future[dict[str, Any]] | None = None
+        self.next_watch_scan = 0.0
 
     @staticmethod
     def _reap(future: Future[dict[str, Any]] | None) -> Future[dict[str, Any]] | None:
@@ -728,6 +1507,10 @@ class DownloadManager:
     def tick(self) -> None:
         self.download_future = self._reap(self.download_future)
         self.process_future = self._reap(self.process_future)
+        settings = load_settings()
+        if settings["watch_input_folder"] and self.clock() >= self.next_watch_scan:
+            scan_local_folder(enqueue=True, now=self.clock())
+            self.next_watch_scan = self.clock() + 1.0
         jobs = list_jobs()
         if self.process_future is None:
             ready = next((job for job in jobs if job["status"] == "READY"), None)
@@ -770,20 +1553,26 @@ class DownloadManager:
 def process_job(
     job: dict[str, Any],
     *, downloader: Callable[[dict[str, Any], Path], Path] = _download,
-    pipeline: Callable[[dict[str, Any], Path, Path], tuple[Path, Path]] = _pipeline,
+    pipeline: Callable[[dict[str, Any], Path, Path], tuple[Path | None, Path]] = _pipeline,
 ) -> dict[str, Any]:
     settings = load_settings()
     job_dir = _job_path(job["id"], settings).parent
     try:
+        started_at = job.get("started_at") or _now()
         job.update(
             status="DOWNLOADING", stage="downloading", progress=0,
-            started_at=job.get("started_at") or _now(), finished_at=None,
+            started_at=started_at, download_started_at=started_at, finished_at=None,
             error=None, cancel_requested=False,
         )
         _write_job(job, settings)
         _log(job_dir, "Download started")
         source = downloader(job, job_dir)
-        job.update(source_path=str(source.resolve()), status="READY", stage="ready", progress=100)
+        downloaded_at = _now()
+        job.update(
+            source_path=str(source.resolve()), status="READY", stage="ready", progress=100,
+            downloaded_at=downloaded_at,
+            download_time=_seconds_between(started_at, downloaded_at),
+        )
         _write_job(job, settings)
         return _process_ready_job(job, pipeline=pipeline)
     except Exception as exc:
@@ -801,7 +1590,7 @@ def process_job(
 
 def process_next_job(
     *, downloader: Callable[[dict[str, Any], Path], Path] = _download,
-    pipeline: Callable[[dict[str, Any], Path, Path], tuple[Path, Path]] = _pipeline,
+    pipeline: Callable[[dict[str, Any], Path, Path], tuple[Path | None, Path]] = _pipeline,
 ) -> dict[str, Any] | None:
     queued = next((job for job in list_jobs() if job["status"] == "QUEUED"), None)
     return process_job(queued, downloader=downloader, pipeline=pipeline) if queued else None
@@ -849,6 +1638,12 @@ def _rpc(request: dict[str, Any]) -> Any:
     payload = request.get("payload") or {}
     if operation == "create_jobs":
         return create_jobs(list(payload.get("urls") or []))
+    if operation == "scan_local_folder":
+        return scan_local_folder()
+    if operation == "start_local_processing":
+        return start_local_processing()
+    if operation == "browse_folder":
+        return browse_folder(payload.get("initial_path"))
     if operation == "list_jobs":
         return list_jobs()
     if operation == "cancel_job":
@@ -859,6 +1654,14 @@ def _rpc(request: dict[str, Any]) -> Any:
         return remove_job(str(payload["id"]))
     if operation == "health":
         return health()
+    if operation == "youtube_login_status":
+        return youtube_login_status()
+    if operation == "open_youtube_login":
+        return open_youtube_login()
+    if operation == "test_youtube_access":
+        return test_youtube_access(payload.get("url"))
+    if operation == "reset_youtube_profile":
+        return reset_youtube_profile(confirmed=payload.get("confirmed") is True)
     if operation == "hardware_benchmark":
         if any(job["status"] not in TERMINAL for job in list_jobs()):
             raise RuntimeError("hardware benchmark requires an empty, idle queue")
@@ -870,19 +1673,18 @@ def _rpc(request: dict[str, Any]) -> Any:
         job = _read_job(job_file)
         if job["status"] != "DONE":
             raise RuntimeError("TikTok formatter requires a DONE job")
-        from formatter.planner import plan_done_job
-
         plan_path = job_file.parent / "format_plan.json"
-        preview_path = job_file.parent / "part1_preview.png"
-        plan = plan_done_job(
-            job_file, output_path=plan_path, preview_path=preview_path,
-            format_anyway=bool(payload.get("format_anyway", False)),
+        plan = _format_done_job(
+            job_file, format_anyway=bool(payload.get("format_anyway", False))
         )
         return {
             "formatter_status": plan["formatter_status"],
             "format_plan": str(plan_path),
-            "preview": plan["preview_path"],
-            "parts": plan["parts"],
+            "preview": plan.get("preview_path"),
+            "parts": plan.get("parts", []),
+            "part_count": plan.get("part_count"),
+            "formatted_outputs": plan.get("formatted_outputs", []),
+            "formatter_error": plan.get("formatter_error"),
             "review_reason": plan.get("review_reason"),
         }
     if operation == "get_settings":

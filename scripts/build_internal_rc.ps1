@@ -2,6 +2,7 @@ param(
     [string]$PythonEnvironment = ".venv_asr_test",
     [string]$SenseVoiceModelSource = $env:SILENCE_CUTTER_SENSEVOICE_MODEL_SOURCE,
     [string]$FsmnVadModelSource = $env:SILENCE_CUTTER_FSMN_VAD_MODEL_SOURCE,
+    [string]$DenoSource = $env:SILENCE_CUTTER_DENO_SOURCE,
     [switch]$SkipDesktopBuild
 )
 
@@ -10,19 +11,37 @@ $repo = (Resolve-Path (Join-Path $PSScriptRoot "..")).Path
 $sourceEnvironment = (Resolve-Path (Join-Path $repo $PythonEnvironment)).Path
 $stage = Join-Path $repo "internal_release_rc"
 $payload = Join-Path $stage "Silence Cutter RC"
+$bundleLink = Join-Path $repo "r"
+$bootstrapResources = $null
 
 if (([IO.Path]::GetFullPath($stage)).TrimEnd('\') -ne (Join-Path $repo "internal_release_rc")) {
     throw "Refusing to clean unexpected staging path: $stage"
 }
+
+if (-not $SkipDesktopBuild) {
+    if (-not (Test-Path -LiteralPath $bundleLink)) {
+        $existingLink = Get-Item -LiteralPath $bundleLink -Force -ErrorAction SilentlyContinue
+        if ($existingLink) {
+            if (-not ($existingLink.Attributes -band [IO.FileAttributes]::ReparsePoint)) {
+                throw "Refusing to replace non-junction path: $bundleLink"
+            }
+            [IO.Directory]::Delete($bundleLink)
+        }
+        $bootstrapResources = Join-Path ([IO.Path]::GetTempPath()) "silence-cutter-tauri-resources"
+        New-Item -ItemType Directory -Force -Path $bootstrapResources | Out-Null
+        New-Item -ItemType Junction -Path $bundleLink -Target $bootstrapResources | Out-Null
+    }
+    Push-Location (Join-Path $repo "desktop")
+    try {
+        npm run tauri build -- --no-bundle
+        if ($LASTEXITCODE -ne 0) { throw "Tauri build failed with exit code $LASTEXITCODE" }
+    } finally { Pop-Location }
+}
+
 if (Test-Path -LiteralPath $stage) {
     Remove-Item -LiteralPath $stage -Recurse -Force
 }
 New-Item -ItemType Directory -Force -Path $payload | Out-Null
-
-if (-not $SkipDesktopBuild) {
-    Push-Location (Join-Path $repo "desktop")
-    try { npm run tauri build -- --no-bundle } finally { Pop-Location }
-}
 
 $resources = Join-Path $payload "resources"
 $app = Join-Path $resources "app"
@@ -64,14 +83,19 @@ Copy-Item -LiteralPath $fsmnVad -Destination (Join-Path $models "fsmn-vad") -Rec
 
 $ffmpeg = (Get-Command ffmpeg -ErrorAction Stop).Source
 $ffprobe = (Get-Command ffprobe -ErrorAction Stop).Source
-Copy-Item -LiteralPath $ffmpeg,$ffprobe -Destination $bin
+$deno = if ($DenoSource) {
+    (Resolve-Path $DenoSource).Path
+} else {
+    (Get-Command deno -ErrorAction Stop).Source
+}
+Copy-Item -LiteralPath $ffmpeg,$ffprobe,$deno -Destination $bin
 Copy-Item -LiteralPath (Join-Path $repo "release_assets\hardware_benchmark.mp4") -Destination $benchmark
 Copy-Item -LiteralPath (Join-Path $repo "desktop\src-tauri\target\release\silence-cutter-desktop.exe") -Destination (Join-Path $payload "Silence Cutter.exe")
 Copy-Item -LiteralPath (Join-Path $repo "scripts\Install-SilenceCutter-RC.ps1") -Destination $stage
 Copy-Item -LiteralPath (Join-Path $repo "TEAM_HARDWARE_VALIDATION_REPORT.md") -Destination $stage
 
 & (Join-Path $repo "scripts\finalize_internal_rc.ps1")
-$bundleLink = Join-Path $repo "r"
-if (Test-Path -LiteralPath $bundleLink) { Remove-Item -LiteralPath $bundleLink -Force }
+if (Test-Path -LiteralPath $bundleLink) { [IO.Directory]::Delete($bundleLink) }
 New-Item -ItemType Junction -Path $bundleLink -Target $resources | Out-Null
+if ($bootstrapResources) { Remove-Item -LiteralPath $bootstrapResources -Force }
 Write-Host "RC staged at $stage"

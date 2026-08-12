@@ -8,7 +8,7 @@ from PIL import Image, ImageDraw, ImageFont
 
 from silence_cutter.runtime_paths import find_executable
 
-from .planner import ROOT, _is_emoji
+from .planner import ROOT, _is_emoji, _source_at
 
 
 def _font(relative: str, size: int, *, bold_variable: bool = False):
@@ -51,27 +51,12 @@ def _extract_frame(video: Path, output: Path, timestamp: float) -> None:
         raise RuntimeError(f"preview frame extraction failed: {completed.stderr.strip()}")
 
 
-def render_preview(plan: dict, output_path: Path) -> Path:
+def render_overlay(plan: dict, output_path: Path, label: str) -> Path:
     layout = plan["layout"]
     canvas_info = layout["canvas"]
     canvas = Image.new(
-        "RGB", (canvas_info["width"], canvas_info["height"]), canvas_info["background"]
+        "RGBA", (canvas_info["width"], canvas_info["height"]), (0, 0, 0, 0)
     )
-    with tempfile.TemporaryDirectory(prefix="formatter-preview-") as directory:
-        frame_path = Path(directory) / "frame.png"
-        _extract_frame(
-            Path(plan["clean_video_path"]), frame_path,
-            min(1.0, plan["parts"][0]["duration"] / 2),
-        )
-        frame = Image.open(frame_path).convert("RGB")
-        crop = layout["crop_geometry"]
-        frame = frame.crop((
-            crop["x"], crop["y"], crop["x"] + crop["width"], crop["y"] + crop["height"]
-        ))
-        video = layout["video_placement"]
-        frame = frame.resize((video["width"], video["height"]), Image.Resampling.LANCZOS)
-        canvas.paste(frame, (video["x"], video["y"]))
-
     draw = ImageDraw.Draw(canvas)
     title_banner = layout["title_banner_geometry"]
     draw.rounded_rectangle(
@@ -112,7 +97,6 @@ def render_preview(plan: dict, output_path: Path) -> Path:
         part_info["font_file"], part_info["rendered_size_px"],
         bold_variable=part_info["bold_variable"],
     )
-    label = plan["parts"][0]["label"]
     box = draw.textbbox((0, 0), label, font=part_font)
     draw.text(
         (
@@ -121,6 +105,38 @@ def render_preview(plan: dict, output_path: Path) -> Path:
         ),
         label, font=part_font, fill="black",
     )
+    output_path.parent.mkdir(parents=True, exist_ok=True)
+    canvas.save(output_path, format="PNG", optimize=True)
+    return output_path
+
+
+def render_preview(plan: dict, output_path: Path) -> Path:
+    layout = plan["layout"]
+    canvas_info = layout["canvas"]
+    canvas = Image.new(
+        "RGB", (canvas_info["width"], canvas_info["height"]), canvas_info["background"]
+    )
+    with tempfile.TemporaryDirectory(prefix="formatter-preview-") as directory:
+        directory_path = Path(directory)
+        frame_path = directory_path / "frame.png"
+        overlay_path = directory_path / "overlay.png"
+        preview_time = min(1.0, plan["parts"][0]["duration"] / 2)
+        direct = bool(plan.get("direct_source_render"))
+        source_time = _source_at(preview_time, plan.get("render_segments") or []) if direct else preview_time
+        _extract_frame(
+            Path(plan["source_video_path"] if direct else plan["clean_video_path"]),
+            frame_path, source_time if source_time is not None else preview_time,
+        )
+        frame = Image.open(frame_path).convert("RGB")
+        crop = layout["crop_geometry"]
+        frame = frame.crop((
+            crop["x"], crop["y"], crop["x"] + crop["width"], crop["y"] + crop["height"]
+        ))
+        video = layout["video_placement"]
+        frame = frame.resize((video["width"], video["height"]), Image.Resampling.LANCZOS)
+        canvas.paste(frame, (video["x"], video["y"]))
+        render_overlay(plan, overlay_path, plan["parts"][0]["label"])
+        canvas = Image.alpha_composite(canvas.convert("RGBA"), Image.open(overlay_path)).convert("RGB")
     output_path.parent.mkdir(parents=True, exist_ok=True)
     canvas.save(output_path, format="PNG", optimize=True)
     return output_path

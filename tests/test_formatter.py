@@ -36,6 +36,106 @@ class FormatterTests(unittest.TestCase):
         self.assertTrue(all(item["type"] == "edit_junction" for item in selected))
         self.assertIn(400, [item["clean_timestamp"] for item in selected])
 
+    def test_part_count_thresholds(self):
+        expected = {
+            540.0: 2,
+            599.9: 2,
+            600.0: 3,
+            900.0: 3,
+            1200.0: 3,
+        }
+        for duration, part_count in expected.items():
+            with self.subTest(duration=duration):
+                parts, _ = plan_parts(
+                    duration, [segment(0, duration, 0, duration)]
+                )
+                self.assertEqual(len(parts), part_count)
+        self.assertEqual(formatter_status(1200.1), "NEEDS_REVIEW")
+
+    def test_two_part_plan_prefers_unequal_natural_boundary(self):
+        parts, candidates = plan_parts(540, [
+            segment(0, 220, 0, 220),
+            segment(220, 540, 226, 546),
+        ])
+        self.assertEqual([item["duration"] for item in parts], [220, 320])
+        selected = [item for item in candidates if item["selected"]]
+        self.assertEqual(len(selected), 1)
+        self.assertEqual(selected[0]["type"], "edit_junction")
+
+    def test_two_part_localized_labels_stop_at_two(self):
+        parts, _ = plan_parts(540, [segment(0, 540, 0, 540)])
+        from formatter.planner import PART_LABELS
+        for part in parts:
+            part["label"] = PART_LABELS["ja"].format(number=part["index"])
+        self.assertEqual([item["label"] for item in parts], ["パート1", "パート2"])
+
+    def test_done_japanese_job_persists_two_part_count_and_labels(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            clean = root / "rendered.mp4"
+            clean.write_bytes(b"clean")
+            report = root / "pipeline_report.json"
+            report.write_text(json.dumps({
+                "output_duration": 540,
+                "debug": {"render": {"segments": [
+                    segment(0, 220, 0, 220), segment(220, 540, 226, 546),
+                ]}},
+            }), encoding="utf-8")
+            (root / "job.json").write_text(json.dumps({
+                "id": "short", "status": "DONE", "title": "日本語の動画",
+                "report_path": str(report), "output_path": str(clean),
+            }, ensure_ascii=False), encoding="utf-8")
+            with (
+                patch("formatter.planner.probe_video_geometry", return_value=(1920, 1080)),
+                patch("formatter.preview.render_preview", return_value=root / "part1_preview.png"),
+            ):
+                plan = plan_done_job(
+                    root, output_path=root / "format_plan.json",
+                    preview_path=root / "part1_preview.png",
+                )
+        self.assertEqual(plan["part_count"], 2)
+        self.assertEqual([part["label"] for part in plan["parts"]], ["パート1", "パート2"])
+
+    def test_analysis_only_job_plans_directly_from_source_keep_mapping(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            source = root / "source.mp4"
+            source.write_bytes(b"source")
+            report = root / "pipeline_report.json"
+            keep = [{"start": 10, "end": 210}, {"start": 220, "end": 560}]
+            report.write_text(json.dumps({
+                "input_duration": 600,
+                "output_duration": None,
+                "expected_output_duration": 540,
+                "keep_intervals": keep,
+                "debug": {"keep_intervals": keep, "union_intervals": []},
+            }), encoding="utf-8")
+            (root / "job.json").write_text(json.dumps({
+                "id": "direct", "status": "DONE", "title": "Direct",
+                "source_path": str(source), "output_path": None,
+                "report_path": str(report),
+            }), encoding="utf-8")
+            with (
+                patch("formatter.planner.probe_video_geometry", return_value=(1920, 1080)),
+                patch("formatter.preview.render_preview", return_value=root / "part1_preview.png"),
+                patch("speech_detector.silero_detector.detect_with_silero") as silero,
+                patch("speech_detector.sensevoice_detector.SenseVoiceDetector.detect") as sensevoice,
+            ):
+                plan = plan_done_job(
+                    root, output_path=root / "format_plan.json",
+                    preview_path=root / "part1_preview.png",
+                )
+        silero.assert_not_called()
+        sensevoice.assert_not_called()
+        self.assertTrue(plan["direct_source_render"])
+        self.assertIsNone(plan["clean_video_path"])
+        self.assertEqual(plan["source_video_path"], str(source))
+        self.assertEqual(plan["clean_video_duration"], 540)
+        self.assertEqual(plan["render_segments"], [
+            {"output_start": 0, "output_end": 200, "source_start": 10, "source_end": 210},
+            {"output_start": 200, "output_end": 540, "source_start": 220, "source_end": 560},
+        ])
+
     def test_auto_format_gate_at_twenty_minutes(self):
         for duration in (720, 900, 1080, 1199, 1200):
             with self.subTest(duration=duration):
@@ -101,12 +201,19 @@ class FormatterTests(unittest.TestCase):
         self.assertTrue(all(item["speech_ended_cleanly"] for item in selected))
 
     def test_center_crop_16_by_9_to_four_by_three_without_stretch(self):
-        crop = center_crop_geometry(1920, 1080)
-        self.assertEqual(crop, {
-            "source_width": 1920, "source_height": 1080,
-            "x": 240, "y": 0, "width": 1440, "height": 1080,
-            "aspect_ratio": "4:3",
-        })
+        cases = {
+            (1920, 1080): (1440, 1080, 240, 0),
+            (3840, 2160): (2880, 2160, 480, 0),
+            (2560, 1440): (1920, 1440, 320, 0),
+        }
+        for (source_width, source_height), (width, height, x, y) in cases.items():
+            with self.subTest(source=(source_width, source_height)):
+                crop = center_crop_geometry(source_width, source_height)
+                self.assertEqual(
+                    (crop["width"], crop["height"], crop["x"], crop["y"]),
+                    (width, height, x, y),
+                )
+                self.assertEqual(crop["width"] / crop["height"], 4 / 3)
         self.assertEqual(VIDEO_PLACEMENT["width"] / VIDEO_PLACEMENT["height"], 4 / 3)
 
     def test_localized_part_labels(self):
@@ -166,6 +273,21 @@ class FormatterTests(unittest.TestCase):
         self.assertGreaterEqual(video["y"], title_banner["y"] + title_banner["height"])
         self.assertGreaterEqual(part_banner["y"], video["y"] + video["height"])
         self.assertEqual((video["width"], video["height"]), (1080, 810))
+
+    def test_complete_content_block_is_vertically_centered(self):
+        title = fit_title("Simple vlog", TITLE_BANNER)
+        layout = build_layout(title, "PART 1")
+        title_banner = layout["title_banner_geometry"]
+        part_banner = layout["part_banner_geometry"]
+        video = layout["video_placement"]
+        block = layout["content_block"]
+        top_free_space = block["y"]
+        bottom_free_space = 1920 - (part_banner["y"] + part_banner["height"])
+
+        self.assertEqual(title_banner["y"], block["y"])
+        self.assertEqual(video["y"], title_banner["y"] + title_banner["height"] + 52)
+        self.assertEqual(part_banner["y"], video["y"] + video["height"] + 52)
+        self.assertLessEqual(abs(top_free_space - bottom_free_space), 1)
 
     def test_three_line_title_uses_only_required_height(self):
         title = fit_title(

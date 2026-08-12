@@ -5,6 +5,7 @@ import json
 from pathlib import Path
 
 from .planner import plan_done_job
+from .renderer import render_format_plan
 
 
 def main() -> None:
@@ -18,10 +19,14 @@ def main() -> None:
         args.job, output_path=args.output, preview_path=args.preview,
         format_anyway=args.format_anyway,
     )
+    if plan["formatter_status"] == "PLANNED":
+        plan = render_format_plan(args.output)
     print(json.dumps({
         "format_plan": str(args.output.resolve()),
         "formatter_status": plan["formatter_status"],
+        "part_count": plan.get("part_count"),
         "preview": plan["preview_path"],
+        "formatted_outputs": plan.get("formatted_outputs", []),
         "parts": plan["parts"],
     }, ensure_ascii=True, indent=2))
 

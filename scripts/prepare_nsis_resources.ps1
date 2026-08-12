@@ -14,7 +14,7 @@ if (Test-Path -LiteralPath $bundleLink) {
     if (-not ($item.Attributes -band [IO.FileAttributes]::ReparsePoint)) {
         throw "Refusing to replace non-junction path: $bundleLink"
     }
-    Remove-Item -LiteralPath $bundleLink -Force
+    [IO.Directory]::Delete($bundleLink)
 }
 New-Item -ItemType Junction -Path $bundleLink -Target $resources | Out-Null
 

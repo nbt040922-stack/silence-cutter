@@ -359,6 +359,15 @@ class ProductionRuntime:
         analysis["metrics"].update(known)
         no_speech_detected = not keep
 
+        if no_speech_detected:
+            keep = [{"start": 0.0, "end": input_duration}]
+            cut = []
+            silence_cuts = []
+            boundary_cuts = []
+            branding_tail_cuts = []
+            visual_safety_cuts = []
+            greeting_cuts = []
+
         render_time = 0.0
         render_diagnostics: dict[str, Any] = {}
         output_duration: float | None = None
@@ -367,13 +376,6 @@ class ProductionRuntime:
             if no_speech_detected:
                 destination.parent.mkdir(parents=True, exist_ok=True)
                 shutil.copy2(source, destination)
-                keep = [{"start": 0.0, "end": input_duration}]
-                cut = []
-                silence_cuts = []
-                boundary_cuts = []
-                branding_tail_cuts = []
-                visual_safety_cuts = []
-                greeting_cuts = []
             else:
                 render_video(
                     source, destination, keep,
