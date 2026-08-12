@@ -28,21 +28,34 @@ def utc_now() -> str:
     return datetime.now(timezone.utc).isoformat()
 
 
-def safe_stem(title: str, fallback: str) -> str:
-    value = re.sub(r'[<>:"/\\|?*\x00-\x1f]', "", title.strip()).rstrip(" .")
-    value = value[:120].rstrip(" .") or fallback
-    if value.split(".", 1)[0].upper() in {
-        "CON", "PRN", "AUX", "NUL", *(f"COM{i}" for i in range(1, 10)),
-        *(f"LPT{i}" for i in range(1, 10)),
-    }:
-        value = f"_{value}"
-    return value
-
-
-def _production_core(source: Path, temporary: Path, report: Path) -> Any:
+def _production_part_core(source: Path, output_dir: Path, title: str, job_dir: Path) -> list[Path]:
+    from formatter.planner import plan_done_job
+    from formatter.renderer import render_format_plan
     from production import process_video
 
-    return process_video(source, temporary, report_path=report)
+    job_dir.mkdir(parents=True, exist_ok=True)
+    report = job_dir / "pipeline_report.json"
+    process_video(
+        source, job_dir / "rendered.mp4", analysis_only=True,
+        debug=True, report_path=report,
+    )
+    job_file = job_dir / "job.json"
+    job_file.write_text(json.dumps({
+        "id": job_dir.name, "status": "DONE", "title": title,
+        "source_path": str(source), "report_path": str(report),
+        "output_folder": str(output_dir), "output_path": None,
+    }, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
+    plan_path = job_dir / "format_plan.json"
+    plan = plan_done_job(
+        job_file, output_path=plan_path,
+        preview_path=job_dir / "part1_preview.png",
+    )
+    if plan["formatter_status"] != "PLANNED":
+        raise RequestError(f"FORMATTER_{plan['formatter_status']}")
+    result = render_format_plan(plan_path)
+    if result["formatter_status"] != "DONE":
+        raise RuntimeError(result.get("formatter_error") or "formatter failed")
+    return [Path(item["path"]) for item in result["formatted_outputs"]]
 
 
 class ContentOpsProcessBridge:
@@ -53,7 +66,7 @@ class ContentOpsProcessBridge:
         port: int = 8791,
         host: str = LOOPBACK,
         max_concurrency: int = 1,
-        core: Callable[[Path, Path, Path], Any] = _production_core,
+        core: Callable[[Path, Path, str, Path], list[Path]] = _production_part_core,
     ) -> None:
         if host != LOOPBACK:
             raise ValueError("Content Ops bridge must bind to 127.0.0.1")
@@ -101,18 +114,6 @@ class ContentOpsProcessBridge:
             raise RequestError("NAS_UNAVAILABLE")
         return request
 
-    def _target(self, request: dict[str, str]) -> Path:
-        output = Path(request["output_dir"])
-        stem = safe_stem(request["video_title"], request["video_id"])
-        reserved = {str(item["target_path"]).casefold() for item in self.records.values()}
-        occupied = lambda candidate: candidate.exists() or str(candidate).casefold() in reserved
-        target = output / f"{stem}.mp4"
-        if occupied(target):
-            target = output / f"{stem}_{request['video_id']}.mp4"
-        if occupied(target):
-            target = output / f"{stem}_{request['video_id']}_{request['handoff_id']}.mp4"
-        return target
-
     def submit(self, payload: Any) -> tuple[bool, dict[str, Any]]:
         if isinstance(payload, dict):
             handoff_id = str(payload.get("handoff_id") or "").strip()
@@ -131,8 +132,7 @@ class ContentOpsProcessBridge:
             record = {
                 "handoff_id": request["handoff_id"], "external_id": external_id,
                 "request": request, "state": "QUEUED", "progress_percent": 0,
-                "processed_file_path": None, "error": None,
-                "target_path": str(self._target(request)),
+                "processed_files": [], "processed_file_path": None, "error": None,
                 "created_at": now, "updated_at": now,
             }
             self.records[request["handoff_id"]] = record
@@ -159,28 +159,25 @@ class ContentOpsProcessBridge:
         with self._lock:
             record = dict(self.records[handoff_id])
         request = record["request"]
-        source, final = Path(request["source_file"]), Path(record["target_path"])
-        partial = final.with_suffix(".processing.mp4")
-        report = self.report_dir / f"{record['external_id']}.json"
+        source, output_dir = Path(request["source_file"]), Path(request["output_dir"])
+        job_dir = self.report_dir / record["external_id"]
         try:
             if not source.is_file():
                 raise RequestError("SOURCE_FILE_MISSING")
-            if not final.parent.is_dir() or not os.access(final.parent, os.W_OK):
+            if not output_dir.is_dir() or not os.access(output_dir, os.W_OK):
                 raise RequestError("NAS_UNAVAILABLE")
-            partial.unlink(missing_ok=True)
             self.report_dir.mkdir(parents=True, exist_ok=True)
             self._update(handoff_id, state="PROCESSING", progress_percent=5, error=None)
-            self.core(source, partial, report)
-            if not partial.is_file():
-                raise RuntimeError("processor completed without output")
+            outputs = self.core(source, output_dir, request["video_title"], job_dir)
+            if not outputs or not all(path.is_file() for path in outputs):
+                raise RuntimeError("formatter completed without all outputs")
             self._update(handoff_id, state="FINALIZING", progress_percent=95)
-            os.replace(partial, final)
+            exact = [str(path.resolve()) for path in outputs]
             self._update(
                 handoff_id, state="DONE", progress_percent=100,
-                processed_file_path=str(final.resolve()), error=None,
+                processed_files=exact, processed_file_path=exact[0], error=None,
             )
         except Exception as exc:
-            partial.unlink(missing_ok=True)
             code = exc.code if isinstance(exc, RequestError) else "PROCESSING_FAILED"
             self._update(handoff_id, state="FAILED", error=code, progress_percent=0)
 
@@ -190,16 +187,19 @@ class ContentOpsProcessBridge:
         for handoff_id in active:
             with self._lock:
                 record = self.records[handoff_id]
-                final = Path(record["target_path"])
-                partial = final.with_suffix(".processing.mp4")
-                if final.is_file():
+                outputs = [Path(value) for value in record.get("processed_files") or []]
+                legacy = Path(str(record.get("processed_file_path") or ""))
+                if (outputs and all(path.is_file() for path in outputs)) or legacy.is_file():
                     record.update(
                         state="DONE", progress_percent=100,
-                        processed_file_path=str(final.resolve()), error=None, updated_at=utc_now(),
+                        processed_files=[str(path.resolve()) for path in outputs],
+                        processed_file_path=(
+                            str(outputs[0].resolve()) if outputs else str(legacy.resolve())
+                        ),
+                        error=None, updated_at=utc_now(),
                     )
                     self._save()
                     continue
-                partial.unlink(missing_ok=True)
                 record.update(state="QUEUED", progress_percent=0, error=None, updated_at=utc_now())
                 self._save()
             self._executor.submit(self._process, handoff_id)

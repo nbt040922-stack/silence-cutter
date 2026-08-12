@@ -6,10 +6,13 @@ import time
 import urllib.error
 import urllib.request
 from pathlib import Path
+from unittest.mock import patch
 
 import pytest
 
-from contentops_process_bridge import ContentOpsProcessBridge, RequestError, safe_stem
+from contentops_process_bridge import (
+    ContentOpsProcessBridge, RequestError, _production_part_core,
+)
 
 
 def request(source: Path, output: Path, **overrides):
@@ -37,13 +40,15 @@ def media(tmp_path):
     return source, output
 
 
-def test_submit_is_idempotent_and_returns_exact_final_path(tmp_path, media):
+def test_submit_is_idempotent_and_returns_exact_part_paths(tmp_path, media):
     source, output = media
     calls = []
-    def core(input_path, temporary, report):
-        calls.append((input_path, temporary, report))
-        assert temporary.name == "Why America Is Changing.processing.mp4"
-        temporary.write_bytes(b"processed")
+    def core(input_path, output_dir, title, job_dir):
+        calls.append((input_path, output_dir, title, job_dir))
+        parts = [output_dir / "PART_1.mp4", output_dir / "PART_2.mp4"]
+        for part in parts:
+            part.write_bytes(b"processed")
+        return parts
     bridge = ContentOpsProcessBridge(records_path=tmp_path / "records.json", core=core)
     created, first = bridge.submit(request(source, output))
     duplicate, second = bridge.submit(request(source, output))
@@ -51,7 +56,9 @@ def test_submit_is_idempotent_and_returns_exact_final_path(tmp_path, media):
     assert created and not duplicate
     assert first["external_id"] == second["external_id"] == "contentops-process-123"
     assert len(calls) == 1
-    assert Path(result["processed_file_path"]).read_bytes() == b"processed"
+    assert [Path(value).name for value in result["processed_files"]] == ["PART_1.mp4", "PART_2.mp4"]
+    assert result["processed_file_path"] == result["processed_files"][0]
+    assert all(Path(value).read_bytes() == b"processed" for value in result["processed_files"])
     assert not list(output.glob("*.processing.mp4"))
     assert source.read_bytes() == b"source"
     source.unlink()
@@ -71,43 +78,39 @@ def test_invalid_missing_source_and_unavailable_nas(tmp_path, media):
     bridge.close()
 
 
-def test_safe_deterministic_collision_name(tmp_path, media):
+def test_production_core_reuses_existing_planner_and_renderer(tmp_path, media):
     source, output = media
-    assert safe_stem('CON<>:"/\\|?*.', "fallback") == "_CON"
-    (output / "Title.mp4").write_bytes(b"other")
-    bridge = ContentOpsProcessBridge(records_path=tmp_path / "records.json", core=lambda _s, target, _r: target.write_bytes(b"ok"))
-    _, record = bridge.submit(request(source, output, video_title="Title"))
-    result = wait_done(bridge, record["external_id"])
-    assert Path(result["processed_file_path"]).name == "Title_abcdefghijk.mp4"
-    bridge.close()
-
-
-def test_active_jobs_reserve_distinct_output_names(tmp_path, media):
-    source, output = media
-    gate = threading.Event()
-    def core(_source, target, _report):
-        gate.wait(1)
-        target.write_bytes(b"ok")
-    bridge = ContentOpsProcessBridge(records_path=tmp_path / "records.json", core=core)
-    _, first = bridge.submit(request(source, output, handoff_id="1", video_title="Title"))
-    _, second = bridge.submit(request(source, output, handoff_id="2", video_title="Title"))
-    assert first["target_path"] != second["target_path"]
-    gate.set()
-    wait_done(bridge, first["external_id"])
-    wait_done(bridge, second["external_id"])
-    bridge.close()
+    job_dir = tmp_path / "adapter-job"
+    parts = [output / "PART_1.mp4", output / "PART_2.mp4"]
+    for part in parts:
+        part.write_bytes(b"part")
+    with (
+        patch("production.process_video") as process,
+        patch("formatter.planner.plan_done_job", return_value={"formatter_status": "PLANNED"}) as plan,
+        patch("formatter.renderer.render_format_plan", return_value={
+            "formatter_status": "DONE",
+            "formatted_outputs": [{"path": str(part)} for part in parts],
+        }) as render,
+    ):
+        result = _production_part_core(source, output, "Video title", job_dir)
+    assert result == parts
+    assert process.call_args.kwargs["analysis_only"] is True
+    assert process.call_args.kwargs["debug"] is True
+    assert plan.call_count == render.call_count == 1
+    job = json.loads((job_dir / "job.json").read_text(encoding="utf-8"))
+    assert job["output_folder"] == str(output)
 
 
 def test_failure_removes_partial_and_never_exposes_final(tmp_path, media):
     source, output = media
-    def core(_source, temporary, _report):
-        temporary.write_bytes(b"partial")
+    def core(_source, output, _title, _job_dir):
+        (output / ".PART_1-temp.mp4").write_bytes(b"partial")
         raise RuntimeError("render failed")
     bridge = ContentOpsProcessBridge(records_path=tmp_path / "records.json", core=core)
     _, record = bridge.submit(request(source, output))
     result = wait_done(bridge, record["external_id"])
     assert (result["state"], result["error"]) == ("FAILED", "PROCESSING_FAILED")
-    assert list(output.iterdir()) == []
+    assert not list(output.glob("PART_*.mp4"))
     assert source.is_file()
     bridge.close()
 
@@ -115,22 +118,23 @@ def test_failure_removes_partial_and_never_exposes_final(tmp_path, media):
 def test_restart_cleans_stale_partial_and_reuses_external_id(tmp_path, media):
     source, output = media
     records = tmp_path / "records.json"
-    final = output / "Title.mp4"
-    partial = output / "Title.processing.mp4"
-    partial.write_bytes(b"stale")
+    final = output / "PART_1.mp4"
     records.write_text(json.dumps([{
         "handoff_id": "123", "external_id": "contentops-process-123",
         "request": request(source, output, video_title="Title"),
         "state": "PROCESSING", "progress_percent": 20,
-        "processed_file_path": None, "error": None, "target_path": str(final),
+        "processed_files": [], "processed_file_path": None, "error": None,
         "created_at": "2026-01-01T00:00:00+00:00", "updated_at": "2026-01-01T00:00:00+00:00",
     }]), encoding="utf-8")
-    bridge = ContentOpsProcessBridge(records_path=records, core=lambda _s, target, _r: target.write_bytes(b"recovered"))
+    def core(_source, output_dir, _title, _job_dir):
+        target = output_dir / "PART_1.mp4"
+        target.write_bytes(b"recovered")
+        return [target]
+    bridge = ContentOpsProcessBridge(records_path=records, core=core)
     bridge.restore()
     result = wait_done(bridge, "contentops-process-123")
     assert result["state"] == "DONE"
     assert final.read_bytes() == b"recovered"
-    assert not partial.exists()
     assert bridge.submit(request(source, output, video_title="Title"))[0] is False
     bridge.close()
 
@@ -147,7 +151,11 @@ def http_json(method, url, payload=None):
 
 def test_localhost_http_contract(tmp_path, media):
     source, output = media
-    bridge = ContentOpsProcessBridge(records_path=tmp_path / "records.json", port=0, core=lambda _s, target, _r: target.write_bytes(b"ok"))
+    def core(_source, output_dir, _title, _job_dir):
+        target = output_dir / "PART_1.mp4"
+        target.write_bytes(b"ok")
+        return [target]
+    bridge = ContentOpsProcessBridge(records_path=tmp_path / "records.json", port=0, core=core)
     host, port = bridge.start()
     assert host == "127.0.0.1"
     assert http_json("GET", f"http://{host}:{port}/health") == (200, {"status": "ok"})
