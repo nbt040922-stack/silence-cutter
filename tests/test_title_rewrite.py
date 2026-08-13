@@ -16,9 +16,10 @@ class FakeClient:
 
     def generate_text(self, images, prompt, **options):
         self.calls.append((images, prompt, options))
-        if isinstance(self.response, Exception):
-            raise self.response
-        return self.response
+        response = self.response.pop(0) if isinstance(self.response, list) else self.response
+        if isinstance(response, Exception):
+            raise response
+        return response
 
 
 def plan(filename_base: str, part_count: int = 3):
@@ -59,9 +60,93 @@ class TitleRewriteTests(unittest.TestCase):
                 self.assertEqual(result["status"], "FALLBACK")
                 self.assertEqual(result["rewritten_title"], "Original Title")
 
+    def test_quality_guard_retries_once_then_applies(self):
+        original = "50 *NEW* Dollar Tree Deals you NEED to buy! (from the pro!)"
+        bad_titles = [
+            "Dollar Tree Deals",
+            "50 Dollar Tree Deals",
+            "Here is the rewritten title: 50 Dollar Tree Deals",
+            "50 DOLLAR TREE DEALS YOU NEED NOW",
+            "50 Dollar Tree Deals You Need!!!",
+            "40 Dollar Tree Finds Actually Worth Buying",
+            "50 Dollar Tree Finds " + "Actually Worth Buying " * 10,
+        ]
+        good = '{"rewritten_title":"50 Dollar Tree Finds Actually Worth Buying"}'
+        for bad in bad_titles:
+            with self.subTest(bad=bad), tempfile.TemporaryDirectory() as directory:
+                client = FakeClient([
+                    json.dumps({"rewritten_title": bad}), good,
+                ])
+                result = rewrite_title_once(
+                    directory, original, directory, source_id="id", client=client,
+                )
+                self.assertEqual(result["status"], "APPLIED")
+                self.assertEqual(result["generation_count"], 2)
+                self.assertEqual(result["retry_count"], 1)
+                self.assertEqual(len(result["guard_rejections"]), 1)
+
+    def test_quality_guard_retries_at_most_once_then_falls_back(self):
+        with tempfile.TemporaryDirectory() as directory:
+            client = FakeClient([
+                '{"rewritten_title":"Retirement"}',
+                '{"rewritten_title":"Retirement Tips"}',
+            ])
+            result = rewrite_title_once(
+                directory, "Why Retirement Changed Everything!", directory,
+                source_id="id", client=client,
+            )
+        self.assertEqual(result["status"], "FALLBACK")
+        self.assertEqual(result["generation_count"], 2)
+        self.assertEqual(len(client.calls), 2)
+
+    def test_worker_failure_does_not_retry(self):
+        with tempfile.TemporaryDirectory() as directory:
+            client = FakeClient(TimeoutError("timeout"))
+            result = rewrite_title_once(
+                directory, "Original Title", directory, source_id="id", client=client,
+            )
+        self.assertEqual(result["status"], "FALLBACK")
+        self.assertEqual(result["generation_count"], 1)
+        self.assertEqual(len(client.calls), 1)
+
+    def test_markdown_response_is_rejected(self):
+        with tempfile.TemporaryDirectory() as directory:
+            client = FakeClient([
+                '```json\n{"rewritten_title":"A Better Title"}\n```',
+                '{"rewritten_title":"Why This Better Title Matters"}',
+            ])
+            result = rewrite_title_once(
+                directory, "Why This Title Matters", directory,
+                source_id="id", client=client,
+            )
+        self.assertEqual(result["status"], "APPLIED")
+        self.assertEqual(result["generation_count"], 2)
+
+    def test_source_language_change_is_retried(self):
+        cases = [
+            ("Tôi sống một mình 30 ngày và điều này đã thay đổi tôi",
+             "30 Days Alone Changed My Life",
+             "Vì sao 30 ngày sống một mình đã thay đổi tôi"),
+            ("移居日本前一定要知道的7件事",
+             "7 Things to Know Before Moving to Japan",
+             "移居日本前必须知道的7件事"),
+        ]
+        for original, bad, good in cases:
+            with self.subTest(original=original), tempfile.TemporaryDirectory() as directory:
+                client = FakeClient([
+                    json.dumps({"rewritten_title": bad}, ensure_ascii=False),
+                    json.dumps({"rewritten_title": good}, ensure_ascii=False),
+                ])
+                result = rewrite_title_once(
+                    directory, original, directory, source_id="id", client=client,
+                )
+                self.assertEqual(result["status"], "APPLIED")
+                self.assertEqual(result["rewritten_title"], good)
+                self.assertEqual(result["retry_count"], 1)
+
     def test_retry_reuses_artifact_without_generation(self):
         with tempfile.TemporaryDirectory() as directory:
-            first = FakeClient()
+            first = FakeClient('{"rewritten_title":"Why the Original Story Still Matters"}')
             original = rewrite_title_once(
                 directory, "Original", directory, source_id="id", client=first,
             )
@@ -91,17 +176,17 @@ class TitleRewriteTests(unittest.TestCase):
     def test_collision_uses_one_source_suffix_for_all_parts(self):
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
-            (root / "Clean Title_PART_1.mp4").write_bytes(b"other")
+            (root / "Clean Title Worth Reading_PART_1.mp4").write_bytes(b"other")
             result = rewrite_title_once(
                 root / "job", "Original", root, source_id="abcdefghijk",
-                client=FakeClient('{"rewritten_title":"Clean Title"}'),
+                client=FakeClient('{"rewritten_title":"Clean Title Worth Reading"}'),
             )
             jobs = build_render_jobs(plan(result["filename_base"]), root)
-        self.assertEqual(result["filename_base"], "Clean Title_abcdefghijk")
+        self.assertEqual(result["filename_base"], "Clean Title Worth Reading_abcdefghijk")
         self.assertEqual([item["path"].name for item in jobs], [
-            "Clean Title_abcdefghijk_PART_1.mp4",
-            "Clean Title_abcdefghijk_PART_2.mp4",
-            "Clean Title_abcdefghijk_PART_3.mp4",
+            "Clean Title Worth Reading_abcdefghijk_PART_1.mp4",
+            "Clean Title Worth Reading_abcdefghijk_PART_2.mp4",
+            "Clean Title Worth Reading_abcdefghijk_PART_3.mp4",
         ])
 
     def test_normal_two_and_enhanced_three_part_naming(self):
@@ -124,6 +209,18 @@ class TitleRewriteTests(unittest.TestCase):
             stored = json.loads((Path(directory) / "title_rewrite.json").read_text(encoding="utf-8"))
         self.assertEqual(stored, result)
         self.assertEqual(stored["model_load_count"], 0)
+
+    def test_quality_fixture_has_required_coverage(self):
+        fixture = json.loads(
+            (Path(__file__).parent / "fixtures" / "title_rewrite_quality_titles.json")
+            .read_text(encoding="utf-8")
+        )
+        categories = {item["category"] for item in fixture}
+        self.assertGreaterEqual(len(fixture), 30)
+        self.assertTrue({
+            "retirement", "personal_finance", "grocery_frugal", "travel_expat",
+            "lifestyle", "housing", "list", "warning", "question", "personal_story",
+        }.issubset(categories))
 
 
 if __name__ == "__main__":

@@ -1,0 +1,439 @@
+{
+  "schema_version": 1,
+  "model": "Qwen/Qwen2.5-VL-7B-Instruct-AWQ",
+  "worker_before": {
+    "status": "READY",
+    "model_loaded": true,
+    "warmed_up": true,
+    "device": "cuda",
+    "model": "D:\\Silence_cutter\\local_models\\Qwen2.5-VL-7B-Instruct-AWQ",
+    "model_load_count": 1,
+    "model_load_seconds": 14.698449199997413,
+    "warmup_seconds": 2.438793599998462,
+    "ready_seconds": 17.146717000003264,
+    "request_count": 53,
+    "started_at": "2026-08-13T16:24:24.106804+00:00",
+    "error": null
+  },
+  "worker_after": {
+    "status": "READY",
+    "model_loaded": true,
+    "warmed_up": true,
+    "device": "cuda",
+    "model": "D:\\Silence_cutter\\local_models\\Qwen2.5-VL-7B-Instruct-AWQ",
+    "model_load_count": 1,
+    "model_load_seconds": 14.698449199997413,
+    "warmup_seconds": 2.438793599998462,
+    "ready_seconds": 17.146717000003264,
+    "request_count": 106,
+    "started_at": "2026-08-13T16:24:24.106804+00:00",
+    "error": null
+  },
+  "title_count": 32,
+  "applied_count": 29,
+  "fallback_count": 3,
+  "retry_count": 21,
+  "generation_count": 53,
+  "average_latency": 27.94274112812468,
+  "median_latency": 30.637121649997425,
+  "max_latency": 44.71291619999829,
+  "results": [
+    {
+      "index": 1,
+      "category": "retirement",
+      "original": "I Live Alone in Retirement and It's a Game Changer!",
+      "rewritten": "Why Living Alone in Retirement Changed Everything",
+      "latency": 27.0094831000024,
+      "status": "APPLIED",
+      "generation_count": 2,
+      "retry_count": 1,
+      "guard_rejections": [
+        "markdown output"
+      ]
+    },
+    {
+      "index": 2,
+      "category": "retirement",
+      "original": "Why Leasing a Car in Retirement ACTUALLY Works",
+      "rewritten": "Why Leasing a Car in Retirement Might Actually Make Sense",
+      "latency": 33.67512290000013,
+      "status": "APPLIED",
+      "generation_count": 2,
+      "retry_count": 1,
+      "guard_rejections": [
+        "markdown output"
+      ]
+    },
+    {
+      "index": 3,
+      "category": "retirement",
+      "original": "7 Things Nobody Tells You About Retiring Early",
+      "rewritten": "7 Things Nobody Tells You About Retiring Early",
+      "latency": 26.982659900000726,
+      "status": "FALLBACK",
+      "generation_count": 2,
+      "retry_count": 1,
+      "guard_rejections": [
+        "markdown output",
+        "title removes all useful numbers"
+      ]
+    },
+    {
+      "index": 4,
+      "category": "personal_finance",
+      "original": "Gen X is in BIG Financial Trouble - Here's Why",
+      "rewritten": "Why Gen X Faces Significant Financial Challenges",
+      "latency": 15.164958299996215,
+      "status": "APPLIED",
+      "generation_count": 1,
+      "retry_count": 0,
+      "guard_rejections": []
+    },
+    {
+      "index": 5,
+      "category": "personal_finance",
+      "original": "I Stopped Buying These 10 Things and Saved $500 a Month",
+      "rewritten": "My Monthly Savings of $500 by Cutting Out These 10 Items",
+      "latency": 44.71291619999829,
+      "status": "APPLIED",
+      "generation_count": 2,
+      "retry_count": 1,
+      "guard_rejections": [
+        "markdown output"
+      ]
+    },
+    {
+      "index": 6,
+      "category": "personal_finance",
+      "original": "Can You Really Retire With Only $300,000?",
+      "rewritten": "Is $300,000 Enough for Retirement?",
+      "latency": 19.66113459999906,
+      "status": "APPLIED",
+      "generation_count": 1,
+      "retry_count": 0,
+      "guard_rejections": []
+    },
+    {
+      "index": 7,
+      "category": "grocery_frugal",
+      "original": "50 *NEW* Dollar Tree Deals you NEED to buy! (from the pro!)",
+      "rewritten": "50 Dollar Tree Finds Actually Worth Buying",
+      "latency": 28.90152799999487,
+      "status": "APPLIED",
+      "generation_count": 2,
+      "retry_count": 1,
+      "guard_rejections": [
+        "markdown output"
+      ]
+    },
+    {
+      "index": 8,
+      "category": "grocery_frugal",
+      "original": "Weekly Grocery Haul With A $200/ Month Budget For A Family Of 3 | $26 Grocery Haul",
+      "rewritten": "How to Shop Smart for $200 Monthly on Groceries for a Family of 3",
+      "latency": 44.0068883999993,
+      "status": "APPLIED",
+      "generation_count": 2,
+      "retry_count": 1,
+      "guard_rejections": [
+        "markdown output"
+      ]
+    },
+    {
+      "index": 9,
+      "category": "grocery_frugal",
+      "original": "Zero Dollars Left for Food? Here's What I Actually Eat",
+      "rewritten": "What I Really Eat When Money Runs Out",
+      "latency": 16.148168700005044,
+      "status": "APPLIED",
+      "generation_count": 1,
+      "retry_count": 0,
+      "guard_rejections": []
+    },
+    {
+      "index": 10,
+      "category": "travel_expat",
+      "original": "We Moved to Portugal and This Surprised Us the Most",
+      "rewritten": "Moving to Portugal Revealed Unexpected Things",
+      "latency": 25.45139399999607,
+      "status": "APPLIED",
+      "generation_count": 2,
+      "retry_count": 1,
+      "guard_rejections": [
+        "markdown output"
+      ]
+    },
+    {
+      "index": 11,
+      "category": "travel_expat",
+      "original": "What Nobody Warns You About Living in Mexico",
+      "rewritten": "Secrets Nobody Tells You About Living in Mexico",
+      "latency": 31.248604599997634,
+      "status": "APPLIED",
+      "generation_count": 2,
+      "retry_count": 1,
+      "guard_rejections": [
+        "markdown output"
+      ]
+    },
+    {
+      "index": 12,
+      "category": "travel_expat",
+      "original": "Is Colombia Still Affordable for Expats in 2026?",
+      "rewritten": "Affordability of Colombia for Expats in 2026",
+      "latency": 21.172198399995978,
+      "status": "APPLIED",
+      "generation_count": 1,
+      "retry_count": 0,
+      "guard_rejections": []
+    },
+    {
+      "index": 13,
+      "category": "lifestyle",
+      "original": "I Quit Social Media for 30 Days - Here's What Changed",
+      "rewritten": "My Journey of Quitting Social Media for 30 Days",
+      "latency": 33.11427260000346,
+      "status": "APPLIED",
+      "generation_count": 2,
+      "retry_count": 1,
+      "guard_rejections": [
+        "markdown output"
+      ]
+    },
+    {
+      "index": 14,
+      "category": "lifestyle",
+      "original": "Why I Own Less but Feel Like I Have More",
+      "rewritten": "How Owning Less Can Actually Lead to More",
+      "latency": 31.5344627999948,
+      "status": "APPLIED",
+      "generation_count": 2,
+      "retry_count": 1,
+      "guard_rejections": [
+        "markdown output"
+      ]
+    },
+    {
+      "index": 15,
+      "category": "lifestyle",
+      "original": "My Simple Morning Routine Changed My Entire Day",
+      "rewritten": "How My Simple Morning Routine Transformed My Day",
+      "latency": 30.697946599997522,
+      "status": "APPLIED",
+      "generation_count": 2,
+      "retry_count": 1,
+      "guard_rejections": [
+        "markdown output"
+      ]
+    },
+    {
+      "index": 16,
+      "category": "housing",
+      "original": "THIS is How Much it Costs to Build a House in Colombia",
+      "rewritten": "What It Really Costs to Build a House in Colombia",
+      "latency": 32.4224336000043,
+      "status": "APPLIED",
+      "generation_count": 2,
+      "retry_count": 1,
+      "guard_rejections": [
+        "markdown output"
+      ]
+    },
+    {
+      "index": 17,
+      "category": "housing",
+      "original": "We Bought the Cheapest House on the Street - Big Mistake?",
+      "rewritten": "Buying the Cheapest House on the Street - Was It Really a Mistake?",
+      "latency": 42.36969179999869,
+      "status": "APPLIED",
+      "generation_count": 2,
+      "retry_count": 1,
+      "guard_rejections": [
+        "markdown output"
+      ]
+    },
+    {
+      "index": 18,
+      "category": "housing",
+      "original": "Renting vs Buying After 60: What Actually Makes Sense?",
+      "rewritten": "Renting vs Buying After 60: What Really Makes Sense?",
+      "latency": 39.04082770000241,
+      "status": "APPLIED",
+      "generation_count": 2,
+      "retry_count": 1,
+      "guard_rejections": [
+        "markdown output"
+      ]
+    },
+    {
+      "index": 19,
+      "category": "list",
+      "original": "12 Amazon Products I Use Every Single Day",
+      "rewritten": "12 Amazon Items I Can't Live Without",
+      "latency": 30.57629669999733,
+      "status": "APPLIED",
+      "generation_count": 2,
+      "retry_count": 1,
+      "guard_rejections": [
+        "markdown output"
+      ]
+    },
+    {
+      "index": 20,
+      "category": "list",
+      "original": "8 Retirement Mistakes That Cost More Than You Think",
+      "rewritten": "8 Retirement Mistakes Costing More Than You Realize",
+      "latency": 31.29590889999963,
+      "status": "APPLIED",
+      "generation_count": 2,
+      "retry_count": 1,
+      "guard_rejections": [
+        "title removes all useful numbers"
+      ]
+    },
+    {
+      "index": 21,
+      "category": "list",
+      "original": "25 Cheap Meals That Don't Taste Cheap",
+      "rewritten": "25 Budget-Friendly Meals That Taste Amazing",
+      "latency": 16.852029599998787,
+      "status": "APPLIED",
+      "generation_count": 1,
+      "retry_count": 0,
+      "guard_rejections": []
+    },
+    {
+      "index": 22,
+      "category": "warning",
+      "original": "Don't Move Abroad Until You Know These 5 Things",
+      "rewritten": "Discover the Top 5 Things You Need to Know Before Moving Abroad",
+      "latency": 34.705326800001785,
+      "status": "APPLIED",
+      "generation_count": 2,
+      "retry_count": 1,
+      "guard_rejections": [
+        "title removes all useful numbers"
+      ]
+    },
+    {
+      "index": 23,
+      "category": "warning",
+      "original": "The Retirement Tax Mistake That Can Cost You Thousands",
+      "rewritten": "Discover the Retirement Tax Mistake That Could Cost You Thousands",
+      "latency": 32.14803479999682,
+      "status": "APPLIED",
+      "generation_count": 2,
+      "retry_count": 1,
+      "guard_rejections": [
+        "markdown output"
+      ]
+    },
+    {
+      "index": 24,
+      "category": "warning",
+      "original": "STOP Buying These Grocery Items in Bulk",
+      "rewritten": "Bulk Grocery Buys You Should Absolutely Avoid",
+      "latency": 16.234696300001815,
+      "status": "APPLIED",
+      "generation_count": 1,
+      "retry_count": 0,
+      "guard_rejections": []
+    },
+    {
+      "index": 25,
+      "category": "question",
+      "original": "What Happens When You Stop Spending Money for a Week?",
+      "rewritten": "The Surprising Impact of One Week Without Spending",
+      "latency": 16.956733500002883,
+      "status": "APPLIED",
+      "generation_count": 1,
+      "retry_count": 0,
+      "guard_rejections": []
+    },
+    {
+      "index": 26,
+      "category": "question",
+      "original": "Is a Costco Membership Still Worth It for Two People?",
+      "rewritten": "Is Costco Membership Still Worth It for Couples?",
+      "latency": 16.08769300000131,
+      "status": "APPLIED",
+      "generation_count": 1,
+      "retry_count": 0,
+      "guard_rejections": []
+    },
+    {
+      "index": 27,
+      "category": "question",
+      "original": "Why Are So Many Americans Retiring Overseas?",
+      "rewritten": "Americans Are Surprisingly Choosing to Retire Abroad",
+      "latency": 14.427223500002583,
+      "status": "APPLIED",
+      "generation_count": 1,
+      "retry_count": 0,
+      "guard_rejections": []
+    },
+    {
+      "index": 28,
+      "category": "personal_story",
+      "original": "I Lost My Job at 55 and Had to Start Over",
+      "rewritten": "My Life Changed After Losing My Job at 55",
+      "latency": 18.582296000000497,
+      "status": "APPLIED",
+      "generation_count": 1,
+      "retry_count": 0,
+      "guard_rejections": []
+    },
+    {
+      "index": 29,
+      "category": "personal_story",
+      "original": "We Sold Everything and Moved Across the World",
+      "rewritten": "Our Life-Changing Journey of Selling Everything and Moving Across the Globe",
+      "latency": 37.060156200001074,
+      "status": "APPLIED",
+      "generation_count": 2,
+      "retry_count": 1,
+      "guard_rejections": [
+        "markdown output"
+      ]
+    },
+    {
+      "index": 30,
+      "category": "personal_story",
+      "original": "Tôi sống một mình 30 ngày và điều này đã thay đổi tôi",
+      "rewritten": "Tôi sống một mình 30 ngày và điều này đã thay đổi tôi",
+      "latency": 32.43672649999644,
+      "status": "FALLBACK",
+      "generation_count": 2,
+      "retry_count": 1,
+      "guard_rejections": [
+        "markdown output",
+        "title changes Vietnamese source language"
+      ]
+    },
+    {
+      "index": 31,
+      "category": "personal_finance",
+      "original": "Gia đình 4 người chi tiêu thế nào với 5 triệu mỗi tháng?",
+      "rewritten": "Gia đình 4 người tiết kiệm 5 triệu mỗi tháng như thế nào?",
+      "latency": 22.789276100003917,
+      "status": "APPLIED",
+      "generation_count": 1,
+      "retry_count": 0,
+      "guard_rejections": []
+    },
+    {
+      "index": 32,
+      "category": "travel_expat",
+      "original": "移居日本前一定要知道的7件事",
+      "rewritten": "移居日本前一定要知道的7件事",
+      "latency": 30.70062599999801,
+      "status": "FALLBACK",
+      "generation_count": 2,
+      "retry_count": 1,
+      "guard_rejections": [
+        "markdown output",
+        "title changes CJK source language"
+      ]
+    }
+  ]
+}
