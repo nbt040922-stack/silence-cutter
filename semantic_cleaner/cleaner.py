@@ -201,6 +201,7 @@ def apply_semantic_cleaner(
         report["keep_intervals"] = final_keep
         report["keep_duration"] = final_keep_duration
         report["expected_output_duration"] = final_keep_duration
+        report.pop("output_duration", None)
         report["semantic_removed_duration"] = removed_duration
         report["semantic_cleaner_status"] = "APPLIED"
         report["semantic_segments_path"] = str(output)
@@ -216,6 +217,8 @@ def apply_semantic_cleaner(
             "runtime": detected.get("runtime"),
             "threshold": config.threshold,
             "segments": detected.get("segments") or [],
+            "coarse_segments": detected.get("coarse_segments") or [],
+            "candidate_windows": detected.get("candidate_windows") or [],
             "removed_segments": accepted,
             "kept_uncertain_segments": uncertain,
             "invalid_segments": invalid,
@@ -223,8 +226,18 @@ def apply_semantic_cleaner(
             "final_keep_duration": final_keep_duration,
             "removed_duration": removed_duration,
             "model_load_time": detected.get("model_load_time"),
+            "frame_extraction_time": detected.get("frame_extraction_time"),
+            "coarse_inference_time": detected.get("coarse_inference_time"),
+            "fine_inference_time": detected.get("fine_inference_time"),
             "semantic_scan_time": detected.get("semantic_scan_time"),
+            "coarse_frame_count": detected.get("coarse_frame_count"),
+            "fine_frame_count": detected.get("fine_frame_count"),
+            "contact_sheet_count": detected.get("contact_sheet_count"),
+            "candidate_count": detected.get("candidate_count"),
+            "generation_count": detected.get("generation_count"),
             "peak_vram_bytes": detected.get("peak_vram_bytes"),
+            "allocated_vram_bytes": detected.get("allocated_vram_bytes"),
+            "reserved_vram_bytes": detected.get("reserved_vram_bytes"),
             "total_additional_processing_time": time.perf_counter() - started,
             "original_pipeline_report": str(original_report),
         }
