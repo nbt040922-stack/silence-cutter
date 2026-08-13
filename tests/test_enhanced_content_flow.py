@@ -80,8 +80,10 @@ class EnhancedContentFlowTests(unittest.TestCase):
                 Path(options["report_path"]).write_text(json.dumps(report), encoding="utf-8")
         class Detector:
             calls = 0
-            def detect(self, _source, _duration):
+            ranges = None
+            def detect_ranges(self, _source, _duration, ranges, _cache, **_options):
                 self.calls += 1
+                self.ranges = ranges
                 return {"segments": []}
         detector, factory_calls = Detector(), []
         def factory():
@@ -95,7 +97,9 @@ class EnhancedContentFlowTests(unittest.TestCase):
             "status": "APPLIED", "generation_count": 1, "model_load_time": 1,
             "ranked_candidates": candidates()[:3],
             "selected_ranges": [
-                {"part_index": index, "topic": item["topic"]}
+                {"part_index": index, "topic": item["topic"],
+                 "start": max(0, item["center"] - 108),
+                 "end": max(0, item["center"] - 108) + 216}
                 for index, item in enumerate(candidates()[:3], 1)
             ],
         }
@@ -118,6 +122,7 @@ class EnhancedContentFlowTests(unittest.TestCase):
         self.assertEqual(result, outputs)
         self.assertEqual(len(factory_calls), 1)
         self.assertEqual(detector.calls, 1)
+        self.assertEqual(len(detector.ranges), 3)
         self.assertEqual(semantic.call_count, 3)
 
 

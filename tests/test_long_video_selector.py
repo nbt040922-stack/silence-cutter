@@ -96,6 +96,10 @@ class LongVideoSelectorTests(unittest.TestCase):
         self.assertGreater(adaptive_target_duration(3600), 240)
         self.assertLessEqual(adaptive_target_duration(10000), 300)
 
+    def test_ranker_accepts_seconds_suffix_from_qwen(self):
+        from long_video_selector.selector import _ranked_candidates
+        self.assertEqual(_ranked_candidates("300.0s,0.85,event", 500)[0]["center"], 300.0)
+
     def test_validation_rejects_overlap_bad_duration_and_bad_score(self):
         valid = [
             {"start": 0, "end": 180, "score": .9},

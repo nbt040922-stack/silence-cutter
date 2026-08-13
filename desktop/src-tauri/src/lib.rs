@@ -1,10 +1,12 @@
 use serde::Deserialize;
 use serde_json::Value;
 use std::fs::{self, OpenOptions};
-use std::io::Write;
+use std::io::{Read, Write};
+use std::net::TcpStream;
 use std::path::{Path, PathBuf};
 use std::process::{Child, Command, Stdio};
 use std::sync::Mutex;
+use std::time::Duration;
 use tauri::{Manager, State};
 
 struct AppState {
@@ -12,7 +14,8 @@ struct AppState {
     python: PathBuf,
     resources: PathBuf,
     data: PathBuf,
-    worker: Mutex<Option<Child>>,
+    backend_worker: Mutex<Option<Child>>,
+    qwen_worker: Mutex<Option<Child>>,
 }
 
 #[derive(Deserialize)]
@@ -111,28 +114,57 @@ fn hidden_command(program: &Path) -> Command {
     command
 }
 
-fn spawn_worker(root: &Path, python: &Path, resources: &Path, data: &Path) -> Result<Child, String> {
+fn spawn_python_worker(
+    root: &Path, python: &Path, resources: &Path, data: &Path,
+    module: &str, log_name: &str,
+) -> Result<Child, String> {
     let log_dir = data;
     fs::create_dir_all(&log_dir).map_err(|error| error.to_string())?;
     let stdout = OpenOptions::new()
         .create(true)
         .append(true)
-        .open(log_dir.join("desktop-worker.stdout.log"))
+        .open(log_dir.join(format!("{}.stdout.log", log_name)))
         .map_err(|error| error.to_string())?;
     let stderr = OpenOptions::new()
         .create(true)
         .append(true)
-        .open(log_dir.join("desktop-worker.stderr.log"))
+        .open(log_dir.join(format!("{}.stderr.log", log_name)))
         .map_err(|error| error.to_string())?;
     let mut command = hidden_command(python);
     configure_command(&mut command, root, resources, data);
-    command.args(["-m", "backend.job_runner", "worker"])
-        .current_dir(root)
+    command.args(["-m", module]);
+    if module == "backend.job_runner" { command.arg("worker"); }
+    command.current_dir(root)
         .stdin(Stdio::null())
         .stdout(stdout)
         .stderr(stderr)
         .spawn()
         .map_err(|error| error.to_string())
+}
+
+fn wait_qwen_ready() -> Result<(), String> {
+    for _ in 0..360 {
+        if let Ok(mut stream) = TcpStream::connect_timeout(
+            &"127.0.0.1:8792".parse().unwrap(), Duration::from_secs(1),
+        ) {
+            let _ = stream.set_read_timeout(Some(Duration::from_secs(1)));
+            let _ = stream.write_all(b"GET /health HTTP/1.0\r\nHost: 127.0.0.1\r\n\r\n");
+            let mut body = String::new();
+            if stream.read_to_string(&mut body).is_ok() {
+                if let Some(json) = body.split("\r\n\r\n").nth(1) {
+                    if let Ok(value) = serde_json::from_str::<Value>(json) {
+                        match value.get("status").and_then(Value::as_str) {
+                            Some("READY") => return Ok(()),
+                            Some("ERROR") => return Err("Qwen worker failed to warm up".into()),
+                            _ => {}
+                        }
+                    }
+                }
+            }
+        }
+        std::thread::sleep(Duration::from_millis(500));
+    }
+    Err("Qwen worker READY timeout".into())
 }
 
 fn call_backend(root: &Path, python: &Path, resources: &Path, data: &Path, request: RpcRequest) -> Result<Value, String> {
@@ -205,7 +237,23 @@ pub fn run() {
     let resources = resource_dir(&root);
     let data = data_dir();
     fs::create_dir_all(&data).expect("Silence Cutter data directory is required");
-    let worker = spawn_worker(&root, &python, &resources, &data).expect("desktop worker failed to start");
+    let qwen_worker = spawn_python_worker(
+        &root, &python, &resources, &data, "qwen_worker.supervisor", "qwen-worker",
+    ).expect("Qwen worker failed to start");
+    let qwen_pid = qwen_worker.id();
+    let qwen_ready = wait_qwen_ready().is_ok();
+    let backend_worker = spawn_python_worker(
+        &root, &python, &resources, &data, "backend.job_runner", "desktop-worker",
+    ).expect("desktop worker failed to start");
+    let runtime_path = data.join("production-runtime.json");
+    let _ = fs::write(&runtime_path, serde_json::json!({
+        "owner_pid": std::process::id(),
+        "qwen_worker_pid": qwen_pid,
+        "qwen_worker_health": if qwen_ready { "READY" } else { "ERROR" },
+        "backend_worker_pid": backend_worker.id(),
+        "startup_unix_seconds": std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH).unwrap_or_default().as_secs(),
+    }).to_string());
     let app = tauri::Builder::default()
         .plugin(tauri_plugin_opener::init())
         .plugin(tauri_plugin_notification::init())
@@ -214,22 +262,21 @@ pub fn run() {
             python,
             resources,
             data,
-            worker: Mutex::new(Some(worker)),
+            backend_worker: Mutex::new(Some(backend_worker)),
+            qwen_worker: Mutex::new(Some(qwen_worker)),
         })
         .invoke_handler(tauri::generate_handler![backend_rpc])
         .build(tauri::generate_context!())
         .expect("error while building Silence Cutter desktop app");
     app.run(|handle, event| {
         if let tauri::RunEvent::Exit = event {
-            if let Some(mut worker) = handle
-                .state::<AppState>()
-                .worker
-                .lock()
-                .ok()
-                .and_then(|mut guard| guard.take())
-            {
-                stop_worker(&mut worker);
+            let state = handle.state::<AppState>();
+            for slot in [&state.backend_worker, &state.qwen_worker] {
+                if let Some(mut worker) = slot.lock().ok().and_then(|mut guard| guard.take()) {
+                    stop_worker(&mut worker);
+                }
             }
+            let _ = fs::remove_file(state.data.join("production-runtime.json"));
         }
     });
 }

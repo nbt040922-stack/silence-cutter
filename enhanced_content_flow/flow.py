@@ -4,9 +4,8 @@ import json
 import math
 import os
 import shutil
-import subprocess
-import sys
 import time
+import threading
 from pathlib import Path
 from typing import Any, Callable
 
@@ -17,16 +16,28 @@ from formatter.planner import (
 from formatter.renderer import render_format_plan
 from long_video_selector.selector import (
     LongVideoSelectorConfig, _duplicate_topic, _form_range,
-    enhanced_target_duration,
+    enhanced_target_duration, run_long_video_selector,
 )
 from production.pipeline import ProductionRuntime
 from semantic_cleaner.cleaner import apply_semantic_cleaner
-from semantic_cleaner.qwen import QwenSemanticDetector
+from semantic_cleaner.qwen import QwenSemanticDetector, QwenWorkerDetector
 from silence_cutter.audio import probe_media
 
 
 class EnhancedFlowSkipped(RuntimeError):
     pass
+
+
+_RUNTIME: ProductionRuntime | None = None
+_RUNTIME_LOCK = threading.Lock()
+
+
+def _warm_production_runtime() -> ProductionRuntime:
+    global _RUNTIME
+    with _RUNTIME_LOCK:
+        if _RUNTIME is None:
+            _RUNTIME = ProductionRuntime()
+        return _RUNTIME
 
 
 def _write(path: Path, value: dict[str, Any]) -> None:
@@ -105,6 +116,7 @@ def _format_plan(
     plan = {
         "schema_version": 2, "formatter_status": "PLANNED", "part_count": 3,
         "enhanced_content_selection": True, "direct_source_render": True,
+        "render_concurrency": 3,
         "source_job_id": job_dir.name, "source_job_path": str(job_file),
         "source_video_path": str(source), "clean_video_path": None,
         "render_segments": mapping, "input_duration": duration,
@@ -122,7 +134,7 @@ def run_enhanced_content_flow(
     source: Path, output_dir: Path, title: str, job_dir: Path, *,
     selector: Callable[..., dict[str, Any]] | None = None,
     runtime: ProductionRuntime | None = None,
-    semantic_detector_factory: Callable[[], Any] = QwenSemanticDetector,
+    semantic_detector_factory: Callable[[], Any] = QwenWorkerDetector,
     renderer: Callable[[Path], dict[str, Any]] = render_format_plan,
 ) -> list[Path]:
     started = time.perf_counter()
@@ -130,25 +142,22 @@ def run_enhanced_content_flow(
     duration = float(probe_media(source)["duration"])
     artifact_path = job_dir / "enhanced_content_selection.json"
     selection_path = job_dir / "long_video_selection.json"
+    visual_cache = job_dir / "visual_cache"
+    semantic_detector: Any | None = None
+
+    def get_semantic_detector() -> Any:
+        nonlocal semantic_detector
+        if semantic_detector is None:
+            semantic_detector = semantic_detector_factory()
+        return semantic_detector
+
     if selector is None:
-        command = [
-            sys.executable, "-m", "long_video_selector", str(source),
-            "--output", str(selection_path), "--enhanced",
-        ]
-        timeout = float(os.environ.get("ENHANCED_SELECTOR_TIMEOUT", "180"))
-        try:
-            completed = subprocess.run(
-                command, capture_output=True, text=True, encoding="utf-8", errors="replace",
-                timeout=timeout, creationflags=0x08000000 if os.name == "nt" else 0,
-            )
-            if completed.returncode or not selection_path.is_file():
-                detail = (completed.stderr or completed.stdout or "enhanced selector failed").strip()
-                selection = {"status": "ENHANCED_CONTENT_SELECTION_SKIPPED", "reason": detail[-2000:]}
-            else:
-                selection = json.loads(selection_path.read_text(encoding="utf-8"))
-        except Exception as exc:
-            selection = {"status": "ENHANCED_CONTENT_SELECTION_SKIPPED",
-                         "reason": f"{type(exc).__name__}: {exc}"}
+        selection = run_long_video_selector(
+            source, duration, selection_path,
+            config=LongVideoSelectorConfig.from_environment(), enhanced=True,
+            detector_factory=get_semantic_detector,
+            cache_root=visual_cache / "selector",
+        )
     else:
         selection = selector(
             source, duration, selection_path,
@@ -158,27 +167,69 @@ def run_enhanced_content_flow(
         artifact = {"status": "ENHANCED_CONTENT_SELECTION_SKIPPED",
                     "source_duration": duration, "reason": selection.get("reason") or selection.get("status")}
         _write(artifact_path, artifact)
+        shutil.rmtree(visual_cache, ignore_errors=True)
         raise EnhancedFlowSkipped(artifact["reason"])
 
-    runtime = runtime or ProductionRuntime()
-    semantic_detector = semantic_detector_factory()
-    semantic_result = semantic_detector.detect(source, duration)
+    runtime = runtime or _warm_production_runtime()
+    semantic_detector = get_semantic_detector()
+    semantic_ranges = [
+        {"start": float(item["start"]), "end": float(item["end"])}
+        for item in selection["selected_ranges"]
+    ]
+    semantic_started = time.perf_counter()
+    semantic_result = (
+        semantic_detector.detect_ranges(
+            source, duration, semantic_ranges, job_dir / "visual_cache" / "semantic",
+            reusable_frames=selection.get("_frame_cache"),
+        )
+        if hasattr(semantic_detector, "detect_ranges")
+        else semantic_detector.detect(source, duration)
+    )
+    semantic_time = time.perf_counter() - semantic_started
+    semantic_results = [semantic_result]
+    semantic_scopes = list(semantic_ranges)
     attempts = 0
 
     def process(candidate: dict[str, Any], scope: dict[str, float]) -> dict[str, Any]:
-        nonlocal attempts
+        nonlocal attempts, semantic_time
         attempts += 1
         attempt_dir = job_dir / f"candidate-{attempts:02d}"
         attempt_dir.mkdir(parents=True, exist_ok=True)
         report_path = attempt_dir / "pipeline_report.json"
-        runtime.process(
-            source, attempt_dir / "unused.mp4", analysis_only=True, debug=True,
-            report_path=report_path, allowed_ranges=[scope], keep_intro_outro=True,
-        )
+        if hasattr(runtime, "analyze_selected_scope"):
+            runtime.analyze_selected_scope(source, scope, report_path)
+        else:
+            runtime.process(
+                source, attempt_dir / "unused.mp4", analysis_only=True, debug=True,
+                report_path=report_path, allowed_ranges=[scope], keep_intro_outro=True,
+            )
         semantic_path = attempt_dir / "semantic_segments.json"
+        if not any(
+            float(item["start"]) <= scope["start"] and float(item["end"]) >= scope["end"]
+            for item in semantic_scopes
+        ):
+            recovery_started = time.perf_counter()
+            recovery_semantic = (
+                semantic_detector.detect_ranges(
+                    source, duration, [scope], visual_cache / f"recovery-{attempts:02d}",
+                )
+                if hasattr(semantic_detector, "detect_ranges")
+                else semantic_detector.detect(source, duration)
+            )
+            semantic_time += time.perf_counter() - recovery_started
+            semantic_results.append(recovery_semantic)
+            semantic_scopes.append(scope)
+        combined_semantic = semantic_result | {
+            "segments": [
+                segment for result in semantic_results for segment in result.get("segments") or []
+            ],
+            "generation_count": sum(
+                int(result.get("generation_count") or 0) for result in semantic_results
+            ),
+        }
         semantic = apply_semantic_cleaner(
             source, report_path, semantic_path,
-            detector=lambda _source, _duration: semantic_result,
+            detector=lambda _source, _duration: combined_semantic,
         )
         if semantic.get("status") != "APPLIED":
             raise EnhancedFlowSkipped("semantic cleaner failed in enhanced mode")
@@ -221,11 +272,22 @@ def run_enhanced_content_flow(
             } for item in parts],
             "selector_generation_count": selection.get("generation_count"),
             "selector_model_load_time": selection.get("model_load_time"),
-            "semantic_model_load_count": 1, "processing_attempt_count": attempts,
+            "semantic_generation_count": sum(
+                int(result.get("generation_count") or 0) for result in semantic_results
+            ),
+            "semantic_model_load_count": 0,
+            "qwen_model_load_time_per_video": 0.0,
+            "qwen_queue_wait": getattr(getattr(semantic_detector, "client", None), "last_queue_wait", 0.0),
+            "selector_time": selection.get("total_processing_time"),
+            "semantic_time": semantic_time,
+            "semantic_selected_ranges": semantic_ranges,
+            "semantic_reused_frame_count": semantic_result.get("reused_frame_count", 0),
+            "processing_attempt_count": attempts,
             "total_processing_time": time.perf_counter() - started,
             "outputs": [str(path.resolve()) for path in outputs],
         }
         _write(artifact_path, artifact)
+        shutil.rmtree(visual_cache, ignore_errors=True)
         return outputs
     except Exception as exc:
         artifact = {
@@ -235,4 +297,5 @@ def run_enhanced_content_flow(
             "total_processing_time": time.perf_counter() - started,
         }
         _write(artifact_path, artifact)
+        shutil.rmtree(visual_cache, ignore_errors=True)
         raise EnhancedFlowSkipped(artifact["reason"]) from exc

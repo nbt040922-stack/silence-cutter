@@ -62,6 +62,22 @@ def extract_analysis_audio(input_path: Path, wav_path: Path, sample_rate: int) -
     return wav_path
 
 
+def extract_analysis_audio_range(
+    input_path: Path, wav_path: Path, sample_rate: int, start: float, end: float,
+) -> Path:
+    if not 0 <= start < end:
+        raise ValueError("audio range must have positive duration")
+    ffmpeg = _require_executable("ffmpeg")
+    wav_path.parent.mkdir(parents=True, exist_ok=True)
+    _run([
+        ffmpeg, "-hide_banner", "-loglevel", "error", "-nostdin", "-y",
+        "-ss", f"{start:.9f}", "-i", str(input_path), "-t", f"{end - start:.9f}",
+        "-map", "0:a:0", "-vn", "-ac", "1", "-ar", str(sample_rate),
+        "-c:a", "pcm_s16le", str(wav_path),
+    ], "scoped analysis audio extraction")
+    return wav_path
+
+
 def probe_media(input_path: Path) -> dict[str, float | bool]:
     ffprobe = _require_executable("ffprobe")
     completed = _run(

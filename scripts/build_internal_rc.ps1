@@ -52,7 +52,7 @@ $models = Join-Path $resources "models"
 $benchmark = Join-Path $resources "benchmark"
 New-Item -ItemType Directory -Force -Path $app,$runtime,$bin,$models,$benchmark | Out-Null
 
-foreach ($folder in "backend","enhanced_content_flow","formatter","long_video_selector","production","semantic_cleaner","silence_cutter","speech_detector") {
+foreach ($folder in "backend","enhanced_content_flow","formatter","long_video_selector","production","qwen_worker","semantic_cleaner","silence_cutter","speech_detector") {
     Copy-Item -LiteralPath (Join-Path $repo $folder) -Destination $app -Recurse
 }
 Copy-Item -LiteralPath (Join-Path $repo "requirements-production.txt") -Destination $app

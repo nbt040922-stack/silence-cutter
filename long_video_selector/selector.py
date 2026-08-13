@@ -7,6 +7,7 @@ import os
 import re
 import tempfile
 import time
+from contextlib import nullcontext
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Callable
@@ -18,7 +19,7 @@ from semantic_cleaner.qwen import (
 
 COARSE_PROMPT = """Choose ONLY the best {count} diverse moments from this entire long-video timeline. Do NOT describe cells or chunks. Do NOT print a header. Output exactly {count} lines only:
 CENTER,SCORE,TOPIC
-CENTER must be one absolute numeric source second. SCORE is 0..1. Prefer importance, retention, novelty, payoff, tension and independent comprehension. Reject intro/ad/outro/CTA/filler/repetition. Topics and times must differ."""
+CENTER must be one absolute numeric source second. SCORE is 0..1. TOPIC is at most two words. Prefer importance, retention, novelty, payoff, tension and independent comprehension. Reject intro/ad/outro/CTA/filler/repetition. Topics and times must differ."""
 
 @dataclass(frozen=True, slots=True)
 class LongVideoSelectorConfig:
@@ -59,7 +60,7 @@ def _ranked_candidates(text: str, duration: float) -> list[dict[str, Any]]:
         if len(row) < 3:
             continue
         try:
-            center, score = float(row[0]), float(row[1])
+            center, score = float(row[0].removesuffix("s")), float(row[1])
         except ValueError:
             continue
         if 0 <= center <= duration and math.isfinite(score) and 0 <= score <= 1:
@@ -156,6 +157,7 @@ def run_long_video_selector(
     config: LongVideoSelectorConfig | None = None,
     detector_factory: Callable[[], Any] = QwenSemanticDetector,
     enhanced: bool = False,
+    cache_root: Path | None = None,
 ) -> dict[str, Any]:
     config = config or LongVideoSelectorConfig.from_environment()
     destination, source_path = Path(output), Path(source)
@@ -174,8 +176,13 @@ def run_long_video_selector(
     try:
         detector = detector_factory()
         extraction_time = coarse_time = ranking_time = refinement_time = 0.0
-        with tempfile.TemporaryDirectory(prefix="long-video-selector-") as directory:
+        context = (
+            nullcontext(str(Path(cache_root))) if cache_root is not None
+            else tempfile.TemporaryDirectory(prefix="long-video-selector-")
+        )
+        with context as directory:
             root = Path(directory)
+            root.mkdir(parents=True, exist_ok=True)
             extraction_started = time.perf_counter()
             paths, timestamps = _extract_sampled_frames(
                 source_path, 0.0, duration, config.coarse_chunk, root / "coarse",
@@ -191,6 +198,7 @@ def run_long_video_selector(
                 coarse_text = detector.generate_text(
                     sheets, COARSE_PROMPT.format(count=requested),
                     max_new_tokens=72 if enhanced else 48,
+                    task="content_selector",
                 )
                 coarse_time = time.perf_counter() - coarse_started
             finally:
@@ -212,7 +220,9 @@ def run_long_video_selector(
             for index, candidate in enumerate(selected):
                 start, end = candidate["start"], candidate["end"]
                 chunk_paths, chunk_times = _extract_sampled_frames(
-                    source_path, start, end, max(30.0, config.refinement_interval), root / f"fine-{index:02d}",
+                    source_path, start, end,
+                    10.0 if enhanced else max(30.0, config.refinement_interval),
+                    root / f"fine-{index:02d}",
                 )
                 fine_paths.extend(chunk_paths)
                 fine_times.extend(chunk_times)
@@ -235,9 +245,16 @@ def run_long_video_selector(
             "coarse_time": coarse_time, "ranking_time": ranking_time,
             "refinement_time": refinement_time, "total_processing_time": time.perf_counter() - started,
             "peak_vram_bytes": detector.torch.cuda.max_memory_allocated(),
+            "qwen_queue_wait": getattr(detector, "last_queue_wait", 0.0),
+            "qwen_generation_time": getattr(detector, "last_generation_time", coarse_time),
         }
     except Exception as exc:
         result = _skipped(duration, config, f"{type(exc).__name__}: {exc}")
         result["total_processing_time"] = time.perf_counter() - started
     _write(destination, result)
+    if cache_root is not None and result.get("status") == "APPLIED":
+        result["_frame_cache"] = [
+            {"path": str(path), "timestamp": timestamp}
+            for path, timestamp in zip(fine_paths, fine_times, strict=True)
+        ]
     return result

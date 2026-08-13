@@ -4,8 +4,10 @@ import json
 import os
 import subprocess
 import tempfile
+import threading
 import time
 import uuid
+from concurrent.futures import ThreadPoolExecutor, as_completed
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Callable
@@ -38,23 +40,29 @@ CUDA_DECODERS = {
 class FormatterProgress:
     def __init__(
         self, durations: list[float], *, clock: Callable[[], float] = time.perf_counter,
-        warmup_seconds: float = 7.0, alpha: float = 0.25,
+        warmup_seconds: float = 7.0, alpha: float = 0.25, concurrent: bool = False,
     ) -> None:
         self.durations = durations
         self.total_duration = sum(durations)
         self.clock = clock
         self.warmup_seconds = warmup_seconds
         self.alpha = alpha
+        self.concurrent = concurrent
         self.started = clock()
         self.part_started = self.started
+        self.part_started_at = [self.started] * len(durations)
         self.current_part = 1
         self.smoothed_speed: float | None = None
         self.part_processed = [0.0] * len(durations)
 
     def start_part(self, part: int) -> dict[str, float | int | None]:
+        if not self.concurrent:
+            for index in range(part - 1):
+                self.part_processed[index] = self.durations[index]
         if part != self.current_part:
             self.current_part = part
             self.part_started = self.clock()
+        self.part_started_at[part - 1] = self.clock()
         return self.update(part, 0.0)
 
     def update(self, part: int, processed_seconds: float) -> dict[str, float | int | None]:
@@ -62,8 +70,7 @@ class FormatterProgress:
         index = part - 1
         processed = min(self.durations[index], max(0.0, processed_seconds))
         self.part_processed[index] = max(self.part_processed[index], processed)
-        completed = sum(self.durations[:index])
-        total_processed = min(self.total_duration, completed + self.part_processed[index])
+        total_processed = min(self.total_duration, sum(self.part_processed))
         elapsed = max(0.0, now - self.started)
         current_speed = total_processed / elapsed if elapsed > 0 and total_processed > 0 else None
         if current_speed:
@@ -86,7 +93,7 @@ class FormatterProgress:
             "formatter_part_progress": min(1.0, self.part_processed[index] / self.durations[index]),
             "formatter_elapsed_seconds": elapsed,
             "formatter_eta_seconds": eta,
-            "formatter_part_elapsed_seconds": max(0.0, now - self.part_started),
+            "formatter_part_elapsed_seconds": max(0.0, now - self.part_started_at[index]),
             "formatter_part_eta_seconds": part_eta,
             "formatter_render_speed": self.smoothed_speed,
         }
@@ -375,7 +382,13 @@ def render_format_plan(plan_path: str | Path) -> dict[str, Any]:
     jobs = build_render_jobs(plan, output_dir)
     part_count = len(jobs)
     audio_profile = {**DEFAULT_AUDIO_PROFILE, **(plan.get("audio_profile") or {})}
-    tracker = FormatterProgress([part["duration"] for part in jobs])
+    render_concurrency = max(1, min(
+        part_count,
+        int(plan.get("render_concurrency") or os.getenv("FORMATTER_RENDER_CONCURRENCY", "1")),
+    ))
+    tracker = FormatterProgress(
+        [part["duration"] for part in jobs], concurrent=render_concurrency > 1,
+    )
     started_at = datetime.now(timezone.utc).isoformat()
     initial_progress = tracker.update(1, 0.0)
     plan.update(
@@ -388,6 +401,7 @@ def render_format_plan(plan_path: str | Path) -> dict[str, Any]:
         eq_settings=audio_profile["eq"],
         final_audio_sample_rate=int(audio_profile["sample_rate"]),
         final_audio_codec="aac", final_audio_bitrate="192k",
+        formatter_render_concurrency=render_concurrency,
         **initial_progress,
     )
     _write_json(path, plan)
@@ -401,6 +415,7 @@ def render_format_plan(plan_path: str | Path) -> dict[str, Any]:
         eq_settings=audio_profile["eq"],
         final_audio_sample_rate=int(audio_profile["sample_rate"]),
         final_audio_codec="aac", final_audio_bitrate="192k",
+        formatter_render_concurrency=render_concurrency,
         **initial_progress,
     )
     ffmpeg = _require_executable("ffmpeg")
@@ -430,26 +445,37 @@ def render_format_plan(plan_path: str | Path) -> dict[str, Any]:
         )
         with tempfile.TemporaryDirectory(prefix="formatter-overlays-", dir=path.parent) as temporary:
             overlay_dir = Path(temporary)
-            for part in jobs:
-                snapshot = tracker.start_part(part["index"])
-                _persist_progress(path, plan, snapshot)
-                last_progress_write = time.perf_counter()
+            overlays = {
+                part["index"]: render_overlay(
+                    plan, overlay_dir / f"part_{part['index']}.png", part["label"],
+                ) for part in jobs
+            }
+            progress_lock = threading.Lock()
+
+            def render_part(part: dict[str, Any]) -> dict[str, Any]:
+                nonlocal last_progress_write, cuda_decoder
+                with progress_lock:
+                    snapshot = tracker.start_part(part["index"])
+                    _persist_progress(path, plan, snapshot)
 
                 def report_progress(processed: float) -> None:
                     nonlocal last_progress_write
-                    progress = tracker.update(part["index"], processed)
-                    now = time.perf_counter()
-                    if now - last_progress_write >= 1.5:
-                        _persist_progress(path, plan, progress)
-                        last_progress_write = now
+                    with progress_lock:
+                        progress = tracker.update(part["index"], processed)
+                        now = time.perf_counter()
+                        if now - last_progress_write >= 1.5:
+                            _persist_progress(path, plan, progress)
+                            last_progress_write = now
 
-                overlay = render_overlay(plan, overlay_dir / f"part_{part['index']}.png", part["label"])
+                overlay = overlays[part["index"]]
                 temporary_output = output_dir / f".PART_{part['index']}-{uuid.uuid4().hex}.mp4"
                 started = time.perf_counter()
+                part_decoder = cuda_decoder
+                part_fallback_error: str | None = None
                 try:
                     command = _command(
                         ffmpeg, source, overlay, temporary_output, part,
-                        plan["layout"], codec, audio_profile, cuda_decoder,
+                        plan["layout"], codec, audio_profile, part_decoder,
                     )
                     try:
                         _run_ffmpeg_progress(
@@ -457,10 +483,12 @@ def render_format_plan(plan_path: str | Path) -> dict[str, Any]:
                             report_progress,
                         )
                     except MediaProcessError as exc:
-                        if not cuda_decoder:
+                        if not part_decoder:
                             raise
-                        cuda_fallback_error = str(exc)
-                        cuda_decoder = None
+                        part_fallback_error = str(exc)
+                        part_decoder = None
+                        with progress_lock:
+                            cuda_decoder = None
                         command = _command(
                             ffmpeg, source, overlay, temporary_output, part,
                             plan["layout"], codec, audio_profile, None,
@@ -474,7 +502,7 @@ def render_format_plan(plan_path: str | Path) -> dict[str, Any]:
                     temporary_output.unlink(missing_ok=True)
                 media = _probe(part["path"])
                 part_render_time = time.perf_counter() - started
-                outputs.append({
+                return {
                     "index": part["index"], "label": part["label"],
                     "path": str(part["path"].resolve()),
                     "planned_start": part["start"], "planned_end": part["end"],
@@ -489,17 +517,27 @@ def render_format_plan(plan_path: str | Path) -> dict[str, Any]:
                     "render_speed": part["duration"] / part_render_time,
                     "codec_requested": "h264_nvenc", "codec_used": codec,
                     "source_codec": source_codec,
-                    "decoder": cuda_decoder or f"{source_codec}_software",
-                    "video_filter_path": "nvdec_cuda" if cuda_decoder else "cpu_nvenc",
-                    "video_filter_device": "CUDA" if cuda_decoder else "CPU",
+                    "decoder": part_decoder or f"{source_codec}_software",
+                    "video_filter_path": "nvdec_cuda" if part_decoder else "cpu_nvenc",
+                    "video_filter_device": "CUDA" if part_decoder else "CPU",
                     "encoder": codec,
-                    "cuda_filter_fallback_error": cuda_fallback_error,
-                })
-                _persist_progress(
-                    path, plan, tracker.update(part["index"], part["duration"])
-                )
-                plan["formatted_outputs"] = outputs
-                _write_json(path, plan)
+                    "cuda_filter_fallback_error": part_fallback_error,
+                }
+
+            with ThreadPoolExecutor(max_workers=render_concurrency) as pool:
+                futures = {pool.submit(render_part, part): part for part in jobs}
+                for future in as_completed(futures):
+                    item = future.result()
+                    outputs.append(item)
+                    outputs.sort(key=lambda value: value["index"])
+                    if item["cuda_filter_fallback_error"]:
+                        cuda_fallback_error = item["cuda_filter_fallback_error"]
+                    with progress_lock:
+                        _persist_progress(
+                            path, plan, tracker.update(item["index"], item["planned_duration"])
+                        )
+                        plan["formatted_outputs"] = outputs
+                        _write_json(path, plan)
         total_render_time = time.perf_counter() - total_start
         part_render_times = [{
             "index": item["index"], "duration": item["planned_duration"],
@@ -546,6 +584,7 @@ def render_format_plan(plan_path: str | Path) -> dict[str, Any]:
                 else "cpu_nvenc"
             ),
             formatter_cuda_filter_fallback_error=cuda_fallback_error,
+            formatter_render_concurrency=render_concurrency,
             audio_sync_duration_validation=validation,
             intermediate_render_skipped=direct_source_render,
             old_estimated_pipeline_seconds=total_render_time + estimated_time_saved,
@@ -572,6 +611,7 @@ def render_format_plan(plan_path: str | Path) -> dict[str, Any]:
                 else "cpu_nvenc"
             ),
             formatter_cuda_filter_fallback_error=cuda_fallback_error,
+            formatter_render_concurrency=render_concurrency,
             audio_sync_duration_validation=validation,
             intermediate_render_skipped=direct_source_render,
             old_estimated_pipeline_seconds=total_render_time + estimated_time_saved,

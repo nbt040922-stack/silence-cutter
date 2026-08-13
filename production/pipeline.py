@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import math
 import shutil
 import tempfile
 import time
@@ -7,7 +8,9 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
-from silence_cutter.audio import MediaProcessError, extract_analysis_audio, probe_media
+from silence_cutter.audio import (
+    MediaProcessError, extract_analysis_audio, extract_analysis_audio_range, probe_media,
+)
 from silence_cutter.renderer import render_video
 from silence_cutter.report import write_report
 from speech_detector.config import HighRecallConfig
@@ -294,6 +297,64 @@ class ProductionRuntime:
     ) -> None:
         self.config = config or HighRecallConfig()
         self.detector = detector or SenseVoiceDetector(self.config)
+
+    def analyze_selected_scope(
+        self, input_path: str | Path, scope: dict[str, float], report_path: str | Path,
+    ) -> dict[str, Any]:
+        """Analyze one absolute source scope without decoding unused source audio."""
+        source = Path(input_path).expanduser().resolve()
+        media = probe_media(source)
+        if not media["has_audio"]:
+            raise MediaProcessError("input media contains no audio stream")
+        source_duration = float(media["duration"])
+        start, end = float(scope["start"]), float(scope["end"])
+        if not 0 <= start < end <= source_duration:
+            raise ValueError("selected range is outside source duration")
+        began = time.perf_counter()
+        with tempfile.TemporaryDirectory(prefix="production-selected-") as directory:
+            extraction = time.perf_counter()
+            audio = extract_analysis_audio_range(
+                source, Path(directory) / "selected.wav", self.config.sample_rate, start, end,
+            )
+            extraction_time = time.perf_counter() - extraction
+            analysis, _ = analyze_audio(
+                audio, end - start, config=self.config,
+                sensevoice_detector=self.detector, known_gap_path=None,
+            )
+
+        def absolute(items: list[dict[str, Any]]) -> list[dict[str, Any]]:
+            return [item | {"start": float(item["start"]) + start,
+                            "end": float(item["end"]) + start} for item in items]
+
+        keep = absolute(analysis["final_keep_intervals"])
+        cut = absolute(analysis["final_cut_intervals"])
+        no_speech = not keep
+        if no_speech:
+            keep, cut = [], []
+        keep_duration = math.fsum(item["end"] - item["start"] for item in keep)
+        cut_duration = math.fsum(item["end"] - item["start"] for item in cut)
+        report = {
+            "input_duration": source_duration,
+            "selected_source_range": {"start": start, "end": end},
+            "keep_intervals": keep, "cut_intervals": cut,
+            "keep_duration": keep_duration, "cut_duration": cut_duration,
+            "expected_output_duration": keep_duration,
+            "total_removed_duration": cut_duration,
+            "removed_percentage": cut_duration / source_duration * 100,
+            "silence_removed_duration": cut_duration,
+            "no_speech_detected": no_speech,
+            "audio_extraction_time": extraction_time,
+            "speech_analysis_time": analysis["metrics"]["core_analysis_time"],
+            "analysis_time": time.perf_counter() - began,
+            "debug": {
+                "silero_intervals": absolute(analysis["silero_intervals"]),
+                "sensevoice_intervals": absolute(analysis["sensevoice_intervals"]),
+                "union_intervals": absolute(analysis["union_intervals"]),
+                "keep_intervals": keep, "cut_intervals": cut,
+            },
+        }
+        write_report(Path(report_path), report)
+        return report
 
     def process(
         self,

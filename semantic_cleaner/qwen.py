@@ -285,6 +285,7 @@ class QwenSemanticDetector:
 
     def generate_text(
         self, images: list[Image.Image], prompt: str, *, max_new_tokens: int | None = None,
+        task: str = "semantic_cleaner",
     ) -> str:
         messages = [{"role": "user", "content": [
             *({"type": "image", "image": image} for image in images),
@@ -394,3 +395,136 @@ class QwenSemanticDetector:
             "allocated_vram_bytes": self.torch.cuda.memory_allocated(),
             "reserved_vram_bytes": self.torch.cuda.memory_reserved(),
         }
+
+    def detect_ranges(
+        self, source: Path, duration: float, ranges: list[dict[str, float]],
+        cache_root: Path | None = None,
+        reusable_frames: list[dict[str, Any]] | None = None,
+    ) -> dict[str, Any]:
+        """Run one semantic generation over selected ranges, preserving source timestamps."""
+        started = time.perf_counter()
+        generation_start = self.generation_count
+        extraction_time = coarse_time = fine_time = 0.0
+        coarse_interval = float(os.environ.get("SEMANTIC_COARSE_INTERVAL", "10"))
+        fine_interval = float(os.environ.get("SEMANTIC_FINE_INTERVAL", "4"))
+        temporary = None
+        if cache_root is None:
+            temporary = tempfile.TemporaryDirectory(prefix="semantic-selected-")
+            root = Path(temporary.name)
+        else:
+            root = Path(cache_root)
+            root.mkdir(parents=True, exist_ok=True)
+        try:
+            coarse_segments: list[dict[str, Any]] = []
+            candidates: list[tuple[float, float]] = []
+            coarse_frame_count = 0
+            extraction_started = time.perf_counter()
+            reused_frame_count = 0
+            for index, scope in enumerate(ranges):
+                start, end = float(scope["start"]), float(scope["end"])
+                cached = [
+                    item for item in (reusable_frames or [])
+                    if start <= float(item["timestamp"]) <= end and Path(item["path"]).is_file()
+                ]
+                if cached:
+                    paths = [Path(item["path"]) for item in cached]
+                    timestamps = [float(item["timestamp"]) for item in cached]
+                    reused_frame_count += len(paths)
+                else:
+                    paths, timestamps = _extract_sampled_frames(
+                        source, start, end, coarse_interval, root / f"coarse-{index:02d}",
+                    )
+                coarse_frame_count += len(paths)
+                local_segments, local_candidates = _visual_candidates(paths, timestamps, duration)
+                coarse_segments.extend(local_segments)
+                candidates.extend(
+                    (max(start, left), min(end, right))
+                    for left, right in local_candidates if max(start, left) < min(end, right)
+                )
+            extraction_time += time.perf_counter() - extraction_started
+            coarse_started = time.perf_counter()
+            candidates = sorted(set(candidates))
+            coarse_time = time.perf_counter() - coarse_started
+            fine_paths: list[Path] = []
+            fine_times: list[float] = []
+            extraction_started = time.perf_counter()
+            for index, (start, end) in enumerate(candidates):
+                paths, timestamps = _extract_sampled_frames(
+                    source, start, end, fine_interval, root / f"fine-{index:03d}",
+                )
+                fine_paths.extend(paths)
+                fine_times.extend(timestamps)
+            extraction_time += time.perf_counter() - extraction_started
+            final_segments: list[dict[str, Any]] = []
+            sheets = _contact_sheets(fine_paths, fine_times) if fine_paths else []
+            try:
+                if sheets:
+                    fine_started = time.perf_counter()
+                    final_segments = self._classify_with_oom_fallback(
+                        sheets, FINE_PROMPT.format(duration=duration),
+                    )
+                    final_segments = _align_to_visual_transitions(
+                        final_segments, coarse_segments, coarse_interval,
+                    )
+                    fine_time = time.perf_counter() - fine_started
+            finally:
+                for sheet in sheets:
+                    sheet.close()
+            if duration > 240.0:
+                final_segments = [item for item in final_segments if not (
+                    (str(item.get("type", "")).upper() == "AD"
+                     and float(item.get("start", 0.0)) >= duration - 120.0)
+                    or (str(item.get("type", "")).upper() == "INTRO"
+                        and float(item.get("end", duration)) > 90.0)
+                    or (str(item.get("type", "")).upper() == "OUTRO"
+                        and float(item.get("start", 0.0)) < duration - 120.0)
+                )]
+        finally:
+            if temporary:
+                temporary.cleanup()
+        return {
+            "model": getattr(self, "model_reference", "Qwen worker"),
+            "runtime": "persistent localhost Qwen worker",
+            "segments": final_segments,
+            "coarse_segments": coarse_segments,
+            "candidate_windows": [{"start": a, "end": b} for a, b in candidates],
+            "model_load_time": self.model_load_time,
+            "frame_extraction_time": extraction_time,
+            "coarse_inference_time": coarse_time,
+            "fine_inference_time": fine_time,
+            "semantic_scan_time": time.perf_counter() - started,
+            "coarse_frame_count": coarse_frame_count,
+            "fine_frame_count": len(fine_paths),
+            "contact_sheet_count": len(sheets),
+            "candidate_count": len(candidates),
+            "generation_count": self.generation_count - generation_start,
+            "peak_vram_bytes": 0,
+            "selected_ranges": ranges,
+            "reused_frame_count": reused_frame_count,
+        }
+
+
+class QwenWorkerDetector(QwenSemanticDetector):
+    """Semantic detector using resident worker instead of loading local weights."""
+
+    def __init__(self, client: Any | None = None) -> None:
+        from qwen_worker.client import QwenWorkerClient
+
+        self.client = client or QwenWorkerClient()
+        health = self.client.wait_ready(float(os.getenv("QWEN_WORKER_READY_TIMEOUT", "180")))
+        self.model_reference = str(health.get("model") or "Qwen worker")
+        self.model_load_time = 0.0
+        self.generation_count = 0
+        self.torch = self.client.torch
+
+    def generate_text(
+        self, images: list[Image.Image], prompt: str, *, max_new_tokens: int | None = None,
+        task: str = "semantic_cleaner",
+    ) -> str:
+        text = self.client.generate_text(
+            images, prompt, max_new_tokens=max_new_tokens, task=task,
+        )
+        self.generation_count += 1
+        self.last_queue_wait = self.client.last_queue_wait
+        self.last_generation_time = self.client.last_generation_time
+        return text
