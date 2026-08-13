@@ -1,9 +1,13 @@
 --extra-index-url https://download.pytorch.org/whl/cu130
 torch==2.11.0+cu130
 torchaudio==2.11.0+cu130
+torchvision==0.26.0+cu130
 funasr==1.4.1
 modelscope>=1.39
 silero-vad>=6,<7
 numpy>=1.26
 Pillow>=10,<13
 yt-dlp[default]==2026.8.4.234419.dev0
+transformers==5.14.1
+accelerate==1.14.0
+gptqmodel==7.3.2

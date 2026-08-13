@@ -91,6 +91,7 @@ def test_production_core_reuses_existing_planner_and_renderer(tmp_path, media):
         part.write_bytes(b"part")
     with (
         patch("production.process_video") as process,
+        patch("backend.job_runner._run_semantic_stage", return_value={"status": "APPLIED"}) as semantic,
         patch("formatter.planner.plan_done_job", return_value={"formatter_status": "PLANNED"}) as plan,
         patch("formatter.renderer.render_format_plan", return_value={
             "formatter_status": "DONE",
@@ -101,6 +102,7 @@ def test_production_core_reuses_existing_planner_and_renderer(tmp_path, media):
     assert result == parts
     assert process.call_args.kwargs["analysis_only"] is True
     assert process.call_args.kwargs["debug"] is True
+    semantic.assert_called_once_with({}, job_dir, source, job_dir / "pipeline_report.json")
     assert plan.call_count == render.call_count == 1
     job = json.loads((job_dir / "job.json").read_text(encoding="utf-8"))
     assert job["output_folder"] == str(output)

@@ -1185,6 +1185,41 @@ def _pipeline(job: dict[str, Any], job_dir: Path, source: Path) -> tuple[Path | 
     return None, report
 
 
+def _run_semantic_stage(job: dict[str, Any], job_dir: Path, source: Path, report: Path) -> dict[str, Any]:
+    from semantic_cleaner.cleaner import write_skipped_artifact
+
+    artifact = job_dir / "semantic_segments.json"
+    command = [
+        sys.executable, "-m", "semantic_cleaner", str(source), str(report),
+        "--output", str(artifact),
+    ]
+    timeout = float(os.environ.get("SEMANTIC_CLEANER_TIMEOUT", "900"))
+    started = time.perf_counter()
+    try:
+        completed = subprocess.run(
+            command, capture_output=True, text=True, encoding="utf-8", errors="replace",
+            env=_utf8_environment(), timeout=timeout,
+            creationflags=0x08000000 if os.name == "nt" else 0,
+        )
+        if completed.returncode:
+            detail = (completed.stderr or completed.stdout or "semantic subprocess failed").strip()
+            result = write_skipped_artifact(artifact, reason=detail[-2000:])
+        else:
+            result = json.loads(artifact.read_text(encoding="utf-8"))
+    except subprocess.TimeoutExpired:
+        result = write_skipped_artifact(
+            artifact, reason=f"semantic cleaner timed out after {timeout:g} seconds",
+        )
+    except Exception as exc:
+        result = write_skipped_artifact(
+            artifact, reason=f"{type(exc).__name__}: {exc}",
+        )
+    result.setdefault("total_additional_processing_time", time.perf_counter() - started)
+    _atomic_json(artifact, result)
+    _log(job_dir, f"Semantic cleaner: {result['status']}")
+    return result
+
+
 def _render_clean_master_from_report(
     source: Path, rendered: Path, report_path: Path,
 ) -> Path:
@@ -1282,6 +1317,7 @@ def _process_ready_job(
         _write_job(job, settings)
         _log(job_dir, "Production pipeline started")
         rendered, report = pipeline(job, job_dir, source)
+        semantic = _run_semantic_stage(job, job_dir, source, report)
         analysis_time = time.perf_counter() - analysis_wall_started
         report_data = json.loads(report.read_text(encoding="utf-8"))
         clean_duration = report_data.get("expected_output_duration")
@@ -1319,6 +1355,9 @@ def _process_ready_job(
             intermediate_render_skipped=not clean_master_required,
             analysis_time=analysis_time,
             pipeline_analysis_time=report_data.get("analysis_time"),
+            semantic_cleaner_status=semantic.get("status"),
+            semantic_segments_path=str((job_dir / "semantic_segments.json").resolve()),
+            semantic_processing_time=semantic.get("total_additional_processing_time"),
             clean_video_duration=clean_duration,
         )
         _write_job(job, settings)

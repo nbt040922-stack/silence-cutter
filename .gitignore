@@ -39,4 +39,6 @@ hardware_benchmark_run.log
 /latency_benchmark/
 /youtube_browser_profile/
 /youtube_profile/
+/local_models/
+/semantic_manual_test/
 /Silence Cutter Local*.exe

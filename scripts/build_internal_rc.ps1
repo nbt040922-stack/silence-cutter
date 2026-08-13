@@ -2,6 +2,7 @@ param(
     [string]$PythonEnvironment = ".venv_asr_test",
     [string]$SenseVoiceModelSource = $env:SILENCE_CUTTER_SENSEVOICE_MODEL_SOURCE,
     [string]$FsmnVadModelSource = $env:SILENCE_CUTTER_FSMN_VAD_MODEL_SOURCE,
+    [string]$QwenModelSource = $env:SILENCE_CUTTER_QWEN_MODEL_SOURCE,
     [string]$DenoSource = $env:SILENCE_CUTTER_DENO_SOURCE,
     [switch]$SkipDesktopBuild
 )
@@ -51,7 +52,7 @@ $models = Join-Path $resources "models"
 $benchmark = Join-Path $resources "benchmark"
 New-Item -ItemType Directory -Force -Path $app,$runtime,$bin,$models,$benchmark | Out-Null
 
-foreach ($folder in "backend","formatter","production","silence_cutter","speech_detector") {
+foreach ($folder in "backend","formatter","production","semantic_cleaner","silence_cutter","speech_detector") {
     Copy-Item -LiteralPath (Join-Path $repo $folder) -Destination $app -Recurse
 }
 Copy-Item -LiteralPath (Join-Path $repo "requirements-production.txt") -Destination $app
@@ -73,13 +74,15 @@ Set-Content -LiteralPath (Join-Path $runtime "python311._pth") -Encoding ASCII -
     "import site"
 )
 
-if (-not $SenseVoiceModelSource -or -not $FsmnVadModelSource) {
-    throw "Provide -SenseVoiceModelSource and -FsmnVadModelSource (or their SILENCE_CUTTER_* environment variables)"
+if (-not $SenseVoiceModelSource -or -not $FsmnVadModelSource -or -not $QwenModelSource) {
+    throw "Provide SenseVoice, FSMN-VAD, and Qwen model sources (or their SILENCE_CUTTER_* environment variables)"
 }
 $senseVoice = (Resolve-Path $SenseVoiceModelSource).Path
 $fsmnVad = (Resolve-Path $FsmnVadModelSource).Path
+$qwen = (Resolve-Path $QwenModelSource).Path
 Copy-Item -LiteralPath $senseVoice -Destination (Join-Path $models "SenseVoiceSmall") -Recurse
 Copy-Item -LiteralPath $fsmnVad -Destination (Join-Path $models "fsmn-vad") -Recurse
+Copy-Item -LiteralPath $qwen -Destination (Join-Path $models "Qwen2.5-VL-7B-Instruct-AWQ") -Recurse
 
 $ffmpeg = (Get-Command ffmpeg -ErrorAction Stop).Source
 $ffprobe = (Get-Command ffprobe -ErrorAction Stop).Source

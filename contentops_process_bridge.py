@@ -29,6 +29,7 @@ def utc_now() -> str:
 
 
 def _production_part_core(source: Path, output_dir: Path, title: str, job_dir: Path) -> list[Path]:
+    from backend.job_runner import _run_semantic_stage
     from formatter.planner import plan_done_job
     from formatter.renderer import render_format_plan
     from production import process_video
@@ -39,6 +40,7 @@ def _production_part_core(source: Path, output_dir: Path, title: str, job_dir: P
         source, job_dir / "rendered.mp4", analysis_only=True,
         debug=True, report_path=report,
     )
+    _run_semantic_stage({}, job_dir, source, report)
     job_file = job_dir / "job.json"
     job_file.write_text(json.dumps({
         "id": job_dir.name, "status": "DONE", "title": title,
