@@ -285,7 +285,7 @@ class QwenSemanticDetector:
 
     def generate_text(
         self, images: list[Image.Image], prompt: str, *, max_new_tokens: int | None = None,
-        task: str = "semantic_cleaner",
+        task: str = "semantic_cleaner", retry: bool = True,
     ) -> str:
         messages = [{"role": "user", "content": [
             *({"type": "image", "image": image} for image in images),
@@ -519,10 +519,10 @@ class QwenWorkerDetector(QwenSemanticDetector):
 
     def generate_text(
         self, images: list[Image.Image], prompt: str, *, max_new_tokens: int | None = None,
-        task: str = "semantic_cleaner",
+        task: str = "semantic_cleaner", retry: bool = True,
     ) -> str:
         text = self.client.generate_text(
-            images, prompt, max_new_tokens=max_new_tokens, task=task,
+            images, prompt, max_new_tokens=max_new_tokens, task=task, retry=retry,
         )
         self.generation_count += 1
         self.last_queue_wait = self.client.last_queue_wait

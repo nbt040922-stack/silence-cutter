@@ -81,6 +81,10 @@ class QwenWorkerRuntime:
             queue_wait = time.perf_counter() - queued
             self.status = "BUSY"
             try:
+                task = str(payload.get("task") or "generic")
+                if task not in {"generic", "selector", "semantic", "content_selector",
+                                "semantic_cleaner", "title_rewrite"}:
+                    raise ValueError("unsupported Qwen worker task")
                 images = []
                 for value in payload.get("images") or []:
                     with Image.open(io.BytesIO(base64.b64decode(value))) as image:
@@ -92,7 +96,7 @@ class QwenWorkerRuntime:
                 )
                 self.request_count += 1
                 return {
-                    "text": text, "task": str(payload.get("task") or "generic"),
+                    "text": text, "task": task,
                     "queue_wait_seconds": queue_wait,
                     "generation_seconds": time.perf_counter() - started,
                 }

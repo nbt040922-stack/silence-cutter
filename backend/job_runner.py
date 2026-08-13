@@ -1372,6 +1372,23 @@ def _process_ready_job(
         output_folder = _user_output_folder(
             outputs, str(job.get("display_name") or job["title"]), job["id"]
         )
+        from formatter.title_rewrite import rewrite_title_once
+        rewrite = rewrite_title_once(
+            job_dir, str(job["title"]), output_folder,
+            source_id=str(job.get("video_id") or job["id"]),
+            part_count=2 if float(clean_duration or 0) < 600 else 3,
+        )
+        report_data.update(
+            original_title=str(job["title"]),
+            rewritten_title=rewrite["rewritten_title"],
+            title_rewrite_status=rewrite["status"],
+            title_rewrite_seconds=rewrite["total_seconds"],
+            title_rewrite_queue_wait=rewrite["queue_wait_seconds"],
+            title_rewrite_generation=rewrite["generation_seconds"],
+            title_rewrite_total=rewrite["total_seconds"],
+            title_rewrite_model_loads=rewrite["model_load_count"],
+        )
+        _atomic_json(report, report_data)
         clean_master_required = bool(rendered) or bool(job.get("keep_clean_master")) or (
             clean_duration is not None and float(clean_duration) > 1200.0
         )
@@ -1409,6 +1426,13 @@ def _process_ready_job(
             long_video_selected_ranges=long_selection.get("selected_ranges") or [],
             long_video_selector_time=long_selection.get("total_processing_time"),
             clean_video_duration=clean_duration,
+            original_title=str(job["title"]),
+            rewritten_title=rewrite["rewritten_title"],
+            filename_base=rewrite["filename_base"],
+            title_rewrite_status=rewrite["status"],
+            title_rewrite_seconds=rewrite["total_seconds"],
+            title_rewrite_queue_wait=rewrite["queue_wait_seconds"],
+            title_rewrite_generation=rewrite["generation_seconds"],
         )
         _write_job(job, settings)
         _log(job_dir, f"Analysis done; clean master {'rendered' if destination else 'skipped'}")

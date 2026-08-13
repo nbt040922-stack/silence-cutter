@@ -42,6 +42,7 @@ def _production_part_core(
     from backend.job_runner import _run_semantic_stage
     from formatter.planner import plan_done_job
     from formatter.renderer import render_format_plan
+    from formatter.title_rewrite import rewrite_title_once
     from production import process_video
 
     job_dir.mkdir(parents=True, exist_ok=True)
@@ -51,11 +52,20 @@ def _production_part_core(
         debug=True, report_path=report,
     )
     _run_semantic_stage({}, job_dir, source, report)
+    try:
+        source_id = json.loads((job_dir / "request.json").read_text(encoding="utf-8")).get("video_id")
+    except (OSError, ValueError):
+        source_id = job_dir.name
+    rewrite = rewrite_title_once(
+        job_dir, title, output_dir, source_id=source_id, part_count=3,
+    )
     job_file = job_dir / "job.json"
     job_file.write_text(json.dumps({
         "id": job_dir.name, "status": "DONE", "title": title,
         "source_path": str(source), "report_path": str(report),
         "output_folder": str(output_dir), "output_path": None,
+        "rewritten_title": rewrite["rewritten_title"],
+        "title_rewrite_status": rewrite["status"],
     }, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
     plan_path = job_dir / "format_plan.json"
     plan = plan_done_job(
@@ -183,6 +193,10 @@ class ContentOpsProcessBridge:
             if not output_dir.is_dir() or not os.access(output_dir, os.W_OK):
                 raise RequestError("NAS_UNAVAILABLE")
             self.report_dir.mkdir(parents=True, exist_ok=True)
+            job_dir.mkdir(parents=True, exist_ok=True)
+            (job_dir / "request.json").write_text(
+                json.dumps(request, ensure_ascii=False, indent=2) + "\n", encoding="utf-8",
+            )
             self._update(handoff_id, state="PROCESSING", progress_percent=5, error=None)
             if request.get("enhanced_content_selection"):
                 outputs = self.core(

@@ -525,6 +525,8 @@ def plan_done_job(
     )
     status = formatter_status(clean_duration, format_anyway)
     part_count = 2 if clean_duration < 600 else 3
+    from .title_rewrite import read_title_rewrite
+    rewrite = read_title_rewrite(job_dir, str(job["title"]))
     title = fit_title(str(job["title"]), TITLE_BANNER)
     part_label_template = PART_LABELS[title["language"]]
     target = Path(output_path).expanduser().resolve()
@@ -548,6 +550,11 @@ def plan_done_job(
             "parts": [],
             "boundary_candidates": [],
             "title": title,
+            "original_title": str(job["title"]),
+            "rewritten_title": rewrite["rewritten_title"],
+            "filename_base": rewrite["filename_base"],
+            "title_rewrite_status": rewrite["status"],
+            "title_rewrite_seconds": rewrite.get("total_seconds", 0.0),
             "part_label_template": part_label_template,
             "preview_path": None,
             "review_reason": "clean video exceeds the 20-minute automatic formatter limit",
@@ -590,6 +597,11 @@ def plan_done_job(
         "boundary_candidates": candidates,
         "layout": layout,
         "title": title,
+        "original_title": str(job["title"]),
+        "rewritten_title": rewrite["rewritten_title"],
+        "filename_base": rewrite["filename_base"],
+        "title_rewrite_status": rewrite["status"],
+        "title_rewrite_seconds": rewrite.get("total_seconds", 0.0),
         "part_label_template": part_label_template,
         "preview_path": str(Path(preview_path).expanduser().resolve()),
         "detector_reuse": {

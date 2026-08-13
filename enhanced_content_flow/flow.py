@@ -14,6 +14,7 @@ from formatter.planner import (
     probe_video_geometry,
 )
 from formatter.renderer import render_format_plan
+from formatter.title_rewrite import rewrite_title_once
 from long_video_selector.selector import (
     LongVideoSelectorConfig, _duplicate_topic, _form_range,
     enhanced_target_duration, run_long_video_selector,
@@ -85,7 +86,7 @@ def recover_three_parts(
 
 def _format_plan(
     source: Path, output_dir: Path, title_text: str, job_dir: Path,
-    parts: list[dict[str, Any]], duration: float,
+    parts: list[dict[str, Any]], duration: float, rewrite: dict[str, Any] | None = None,
 ) -> Path:
     mapping, clean_parts, cursor = [], [], 0.0
     for part in parts:
@@ -123,6 +124,11 @@ def _format_plan(
         "clean_video_duration": cursor, "parts": clean_parts,
         "boundary_candidates": [], "part_boundaries": [item["clean_end"] for item in clean_parts[:-1]],
         "layout": layout, "title": title, "part_label_template": label_template,
+        "original_title": title_text,
+        "rewritten_title": (rewrite or {}).get("rewritten_title", title_text),
+        "filename_base": (rewrite or {}).get("filename_base"),
+        "title_rewrite_status": (rewrite or {}).get("status", "SKIPPED"),
+        "title_rewrite_seconds": (rewrite or {}).get("total_seconds", 0.0),
         "preview_path": None,
     }
     path = job_dir / "format_plan.json"
@@ -259,7 +265,16 @@ def run_enhanced_content_flow(
             shutil.copy2(part["report_path"], report_path)
             part["semantic_path"] = str(semantic_path)
             part["report_path"] = str(report_path)
-        plan_path = _format_plan(source, output_dir, title, job_dir, parts, duration)
+        request_path = job_dir / "request.json"
+        try:
+            source_id = json.loads(request_path.read_text(encoding="utf-8")).get("video_id")
+        except (OSError, ValueError):
+            source_id = job_dir.name
+        rewrite = rewrite_title_once(
+            job_dir, title, output_dir, source_id=source_id, part_count=3,
+            client=semantic_detector,
+        )
+        plan_path = _format_plan(source, output_dir, title, job_dir, parts, duration, rewrite)
         rendered = renderer(plan_path)
         outputs = [Path(item["path"]) for item in rendered.get("formatted_outputs") or []]
         if rendered.get("formatter_status") != "DONE" or len(outputs) != 3:
@@ -282,6 +297,15 @@ def run_enhanced_content_flow(
             "semantic_time": semantic_time,
             "semantic_selected_ranges": semantic_ranges,
             "semantic_reused_frame_count": semantic_result.get("reused_frame_count", 0),
+            "original_title": title,
+            "rewritten_title": rewrite["rewritten_title"],
+            "title_rewrite_status": rewrite["status"],
+            "title_rewrite_seconds": rewrite["total_seconds"],
+            "title_rewrite_queue_wait": rewrite["queue_wait_seconds"],
+            "title_rewrite_generation": rewrite["generation_seconds"],
+            "title_rewrite_total": rewrite["total_seconds"],
+            "title_rewrite_model_loads": rewrite["model_load_count"],
+            "title_rewrite_generations_per_video": rewrite["generation_count"],
             "processing_attempt_count": attempts,
             "total_processing_time": time.perf_counter() - started,
             "outputs": [str(path.resolve()) for path in outputs],

@@ -70,7 +70,7 @@ class QwenWorkerClient:
 
     def generate_text(
         self, images: list[Image.Image], prompt: str, *, max_new_tokens: int | None = None,
-        task: str = "generic",
+        task: str = "generic", retry: bool = True,
     ) -> str:
         encoded = []
         for image in images:
@@ -83,6 +83,8 @@ class QwenWorkerClient:
         try:
             result = self._request("/generate", payload)
         except WorkerUnavailable:
+            if not retry:
+                raise
             self.wait_ready(
                 float(os.getenv("QWEN_WORKER_RESTART_TIMEOUT", "180")),
                 wait_through_error=True,

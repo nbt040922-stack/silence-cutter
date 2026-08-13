@@ -42,8 +42,11 @@ class QwenWorkerTests(unittest.TestCase):
         self.assertEqual(FakeDetector.initializations, 1)
         runtime.generate({"task": "selector", "prompt": "select", "images": []})
         runtime.generate({"task": "semantic", "prompt": "clean", "images": []})
+        title = runtime.generate({"task": "title_rewrite", "prompt": "title", "images": []})
         self.assertEqual(runtime.health()["model_load_count"], 1)
-        self.assertEqual(runtime.health()["request_count"], 2)
+        self.assertEqual(runtime.health()["request_count"], 3)
+        self.assertEqual(title["task"], "title_rewrite")
+        self.assertEqual(FakeDetector.initializations, 1)
 
     def test_requests_queue_sequentially(self):
         runtime = QwenWorkerRuntime(FakeDetector)

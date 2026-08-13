@@ -155,6 +155,7 @@ def build_render_jobs(plan: dict[str, Any], output_dir: Path) -> list[dict[str, 
     if part_count not in {2, 3} or len(parts) != part_count:
         raise ValueError("formatter plan part_count must match two or three parts")
     jobs = []
+    filename_base = str(plan.get("filename_base") or "").strip()
     previous_end = 0.0
     for expected_index, part in enumerate(parts, start=1):
         start, end = float(part["clean_start"]), float(part["clean_end"])
@@ -174,7 +175,10 @@ def build_render_jobs(plan: dict[str, Any], output_dir: Path) -> list[dict[str, 
             "input_seek": min(float(item["start"]) for item in source_segments),
             "latest_source_timestamp": max(float(item["end"]) for item in source_segments),
             "trim_branch_count": len(source_segments),
-            "path": output_dir / f"PART_{expected_index}.mp4",
+            "path": output_dir / (
+                f"{filename_base}_PART_{expected_index}.mp4"
+                if filename_base else f"PART_{expected_index}.mp4"
+            ),
         })
         previous_end = end
     if abs(previous_end - float(plan["clean_video_duration"])) > 1e-3:
