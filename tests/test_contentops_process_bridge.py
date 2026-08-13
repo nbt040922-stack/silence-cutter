@@ -78,6 +78,27 @@ def test_invalid_missing_source_and_unavailable_nas(tmp_path, media):
     bridge.close()
 
 
+def test_enhanced_flag_is_explicit_and_omitted_keeps_old_core_contract(tmp_path, media):
+    source, output = media
+    calls = []
+    def core(*args, **kwargs):
+        calls.append(kwargs)
+        target = output / "PART_1.mp4"
+        target.write_bytes(b"ok")
+        return [target]
+    bridge = ContentOpsProcessBridge(records_path=tmp_path / "records.json", core=core)
+    _, normal = bridge.submit(request(source, output, handoff_id="normal"))
+    wait_done(bridge, normal["external_id"])
+    _, enhanced = bridge.submit(request(
+        source, output, handoff_id="enhanced", enhanced_content_selection=True,
+    ))
+    wait_done(bridge, enhanced["external_id"])
+    assert calls == [{}, {"enhanced_content_selection": True}]
+    with pytest.raises(RequestError, match="INVALID_REQUEST"):
+        bridge.submit(request(source, output, handoff_id="badbool", enhanced_content_selection="yes"))
+    bridge.close()
+
+
 def test_bridge_rejects_non_loopback_bind(tmp_path):
     with pytest.raises(ValueError, match="must bind to 127.0.0.1"):
         ContentOpsProcessBridge(records_path=tmp_path / "records.json", host="0.0.0.0")
@@ -106,6 +127,29 @@ def test_production_core_reuses_existing_planner_and_renderer(tmp_path, media):
     assert plan.call_count == render.call_count == 1
     job = json.loads((job_dir / "job.json").read_text(encoding="utf-8"))
     assert job["output_folder"] == str(output)
+
+
+def test_enhanced_failure_falls_open_to_normal_core(tmp_path, media):
+    source, output = media
+    job_dir = tmp_path / "fallback-job"
+    parts = [output / "PART_1.mp4", output / "PART_2.mp4"]
+    for part in parts:
+        part.write_bytes(b"part")
+    from enhanced_content_flow import EnhancedFlowSkipped
+    with (
+        patch("enhanced_content_flow.run_enhanced_content_flow", side_effect=EnhancedFlowSkipped("no three parts")) as enhanced,
+        patch("production.process_video"),
+        patch("backend.job_runner._run_semantic_stage", return_value={"status": "APPLIED"}),
+        patch("formatter.planner.plan_done_job", return_value={"formatter_status": "PLANNED"}),
+        patch("formatter.renderer.render_format_plan", return_value={
+            "formatter_status": "DONE", "formatted_outputs": [{"path": str(part)} for part in parts],
+        }),
+    ):
+        result = _production_part_core(
+            source, output, "Video title", job_dir, enhanced_content_selection=True,
+        )
+    assert result == parts
+    enhanced.assert_called_once()
 
 
 def test_failure_removes_partial_and_never_exposes_final(tmp_path, media):

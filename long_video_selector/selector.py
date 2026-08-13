@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import itertools
 import math
 import os
 import re
@@ -15,9 +16,9 @@ from semantic_cleaner.qwen import (
 )
 
 
-COARSE_PROMPT = """Choose ONLY the best 3 diverse moments from this entire long-video timeline. Do NOT describe cells or chunks. Do NOT print a header. Output exactly 3 lines only:
+COARSE_PROMPT = """Choose ONLY the best {count} diverse moments from this entire long-video timeline. Do NOT describe cells or chunks. Do NOT print a header. Output exactly {count} lines only:
 CENTER,SCORE,TOPIC
-CENTER must be one absolute numeric source second. SCORE is 0..1. Prefer importance, retention, novelty, payoff, tension and independent comprehension. Reject intro/ad/outro/CTA/filler/repetition. The 3 topics and times must differ."""
+CENTER must be one absolute numeric source second. SCORE is 0..1. Prefer importance, retention, novelty, payoff, tension and independent comprehension. Reject intro/ad/outro/CTA/filler/repetition. Topics and times must differ."""
 
 @dataclass(frozen=True, slots=True)
 class LongVideoSelectorConfig:
@@ -36,6 +37,10 @@ def adaptive_target_duration(source_duration: float) -> float:
     if source_duration <= 2400.0:
         return 180.0 + (source_duration - 1500.0) / 900.0 * 60.0
     return min(300.0, 240.0 + (source_duration - 2400.0) / 2400.0 * 60.0)
+
+
+def enhanced_target_duration(source_duration: float) -> float:
+    return min(240.0, max(120.0, source_duration * 0.18))
 
 
 def _write(path: Path, value: dict[str, Any]) -> None:
@@ -72,32 +77,46 @@ def _duplicate_topic(left: str, right: str) -> bool:
     return bool(a and b and (a == b or len(a & b) / min(len(a), len(b)) >= 0.8))
 
 
-def _form_range(center: float, target: float, duration: float) -> tuple[float, float]:
-    length = min(300.0, max(180.0, target))
+def _form_range(
+    center: float, target: float, duration: float, minimum: float = 180.0,
+) -> tuple[float, float]:
+    length = min(300.0, max(minimum, target))
     start = min(max(0.0, center - length / 2), max(0.0, duration - length))
     return start, min(duration, start + length)
 
 
 def _select_ranked_ranges(
-    ranked: list[dict[str, Any]], duration: float, target: float,
+    ranked: list[dict[str, Any]], duration: float, target: float, minimum: float = 180.0,
 ) -> list[dict[str, Any]]:
-    selected = []
+    viable = []
     for candidate in ranked:
-        start, end = _form_range(candidate["center"], target, duration)
+        start, end = _form_range(candidate["center"], target, duration, minimum)
         item = {"start": start, "end": end, "duration": end - start,
                 "score": candidate["score"], "topic": candidate["topic"],
                 "reason": candidate["reason"]}
-        if any(_duplicate_topic(item["topic"], other["topic"]) for other in selected):
+        viable.append(item)
+    best = None
+    for group in itertools.combinations(viable, 3):
+        ordered = sorted(group, key=lambda item: item["start"])
+        if any(_duplicate_topic(left["topic"], right["topic"])
+               for left, right in itertools.combinations(ordered, 2)):
             continue
-        if any(start < other["end"] and other["start"] < end for other in selected):
+        if any(left["end"] > right["start"] for left, right in zip(ordered, ordered[1:])):
             continue
-        selected.append(item)
-        if len(selected) == 3:
-            break
-    return sorted(selected, key=lambda item: item["start"])
+        span = (ordered[-1]["end"] - ordered[0]["start"]) / duration
+        centers = [(item["start"] + item["end"]) / 2 for item in ordered]
+        minimum_separation = min(
+            right - left for left, right in zip(centers, centers[1:])
+        ) / duration
+        value = sum(item["score"] for item in ordered) + 0.30 * span + 0.30 * minimum_separation
+        if best is None or value > best[0]:
+            best = value, ordered
+    return best[1] if best else []
 
 
-def validate_selected_ranges(ranges: Any, duration: float) -> bool:
+def validate_selected_ranges(
+    ranges: Any, duration: float, *, minimum: float = 180.0,
+) -> bool:
     if not isinstance(ranges, list) or len(ranges) != 3:
         return False
     previous_end = -1.0
@@ -108,7 +127,7 @@ def validate_selected_ranges(ranges: Any, duration: float) -> bool:
         except (KeyError, TypeError, ValueError):
             return False
         length = end - start
-        if not (0 <= start < end <= duration and 180 <= length <= 300 and
+        if not (0 <= start < end <= duration and minimum <= length <= 300 and
                 math.isfinite(score) and 0 <= score <= 1 and start >= previous_end):
             return False
         previous_end, total = end, total + length
@@ -136,10 +155,17 @@ def run_long_video_selector(
     source: str | Path, duration: float, output: str | Path, *,
     config: LongVideoSelectorConfig | None = None,
     detector_factory: Callable[[], Any] = QwenSemanticDetector,
+    enhanced: bool = False,
 ) -> dict[str, Any]:
     config = config or LongVideoSelectorConfig.from_environment()
     destination, source_path = Path(output), Path(source)
-    if duration <= config.threshold:
+    minimum = 120.0 if enhanced else 180.0
+    if enhanced and duration * 0.70 < minimum * 3:
+        result = _skipped(duration, config, "insufficient duration for three ranges")
+        result["status"] = "ENHANCED_SELECTOR_SKIPPED_INSUFFICIENT_DURATION"
+        _write(destination, result)
+        return result
+    if not enhanced and duration <= config.threshold:
         result = {"status": "NOT_APPLICABLE", "source_duration": duration,
                   "threshold": config.threshold, "selected_ranges": []}
         _write(destination, result)
@@ -161,8 +187,10 @@ def run_long_video_selector(
             )
             try:
                 coarse_started = time.perf_counter()
+                requested = 6 if enhanced else 3
                 coarse_text = detector.generate_text(
-                    sheets, COARSE_PROMPT, max_new_tokens=48,
+                    sheets, COARSE_PROMPT.format(count=requested),
+                    max_new_tokens=72 if enhanced else 48,
                 )
                 coarse_time = time.perf_counter() - coarse_started
             finally:
@@ -173,8 +201,8 @@ def run_long_video_selector(
             ranking_time = time.perf_counter() - ranking_started
             if len(ranked) < 3:
                 raise ValueError(f"fewer than 3 valid ranked candidates: {coarse_text[:500]!r}")
-            target = adaptive_target_duration(duration)
-            selected = _select_ranked_ranges(ranked, duration, target)
+            target = enhanced_target_duration(duration) if enhanced else adaptive_target_duration(duration)
+            selected = _select_ranked_ranges(ranked, duration, target, minimum)
             if len(selected) < 3:
                 raise ValueError(
                     f"fewer than 3 non-overlapping diverse candidates: {ranked!r}"
@@ -192,13 +220,17 @@ def run_long_video_selector(
             refinement_started = time.perf_counter()
             _visual_candidates(fine_paths, fine_times, duration)
             refinement_time = time.perf_counter() - refinement_started
-        if not validate_selected_ranges(selected, duration):
+        if not validate_selected_ranges(selected, duration, minimum=minimum):
             raise ValueError("final selection is not exactly 3 valid diverse ranges")
         result = {
             "status": "APPLIED", "source_duration": duration, "threshold": config.threshold,
             "coarse_chunk_count": len(paths), "sampled_frame_count": len(paths) + len(fine_paths),
             "generation_count": detector.generation_count, "candidate_count": len(ranked),
-            "selected_ranges": selected, "selected_total_duration": math.fsum(item["duration"] for item in selected),
+            "ranked_candidates": ranked,
+            "selected_ranges": [item | {"part_index": index} for index, item in enumerate(selected, 1)],
+            "rejected_candidates": [item | {"rejection_reason": "not selected by diversity/overlap score"}
+                                    for item in ranked if not any(item["center"] >= chosen["start"] and item["center"] <= chosen["end"] for chosen in selected)],
+            "selected_total_duration": math.fsum(item["duration"] for item in selected),
             "model_load_time": detector.model_load_time, "frame_extraction_time": extraction_time,
             "coarse_time": coarse_time, "ranking_time": ranking_time,
             "refinement_time": refinement_time, "total_processing_time": time.perf_counter() - started,

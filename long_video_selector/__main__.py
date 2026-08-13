@@ -13,10 +13,12 @@ def main() -> None:
     parser = argparse.ArgumentParser(description="Select the best three ranges in a long video")
     parser.add_argument("source", type=Path)
     parser.add_argument("--output", type=Path, required=True)
+    parser.add_argument("--enhanced", action="store_true")
     args = parser.parse_args()
     duration = float(probe_media(args.source)["duration"])
     result = run_long_video_selector(
         args.source, duration, args.output, config=LongVideoSelectorConfig.from_environment(),
+        enhanced=args.enhanced,
     )
     print(json.dumps(result, ensure_ascii=False))
 

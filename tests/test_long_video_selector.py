@@ -31,6 +31,10 @@ COARSE = "\n".join([
     "300,0.8,event one", "900,0.9,event two",
     "1500,0.95,event three", "2100,0.85,event four",
 ])
+ENHANCED_COARSE = "\n".join(
+    f"{center},{.99 - index * .05:.2f},topic {index}"
+    for index, center in enumerate((80, 250, 430, 610, 790, 970))
+)
 class LongVideoSelectorTests(unittest.TestCase):
     def test_short_video_does_not_invoke_qwen(self):
         with tempfile.TemporaryDirectory() as directory:
@@ -40,6 +44,31 @@ class LongVideoSelectorTests(unittest.TestCase):
                 detector_factory=factory,
             )
         self.assertEqual(result["status"], "NOT_APPLICABLE")
+        factory.assert_not_called()
+
+    @patch("long_video_selector.selector._contact_sheets", return_value=[])
+    @patch("long_video_selector.selector._visual_candidates", return_value=([], []))
+    @patch("long_video_selector.selector._extract_sampled_frames", return_value=([Path("frame.jpg")], [0.0]))
+    def test_enhanced_runs_below_900_and_preserves_part_indexes(self, _extract, _visual, _sheets):
+        detector = FakeDetector([ENHANCED_COARSE])
+        with tempfile.TemporaryDirectory() as directory:
+            result = run_long_video_selector(
+                "source.mp4", 850.0, Path(directory) / "selection.json",
+                enhanced=True, detector_factory=lambda: detector,
+            )
+        self.assertEqual(result["status"], "APPLIED")
+        self.assertGreater(len(result["ranked_candidates"]), 3)
+        self.assertEqual([item["part_index"] for item in result["selected_ranges"]], [1, 2, 3])
+        self.assertTrue(all(120 <= item["duration"] <= 300 for item in result["selected_ranges"]))
+
+    def test_enhanced_insufficient_duration_skips_without_qwen(self):
+        factory = Mock()
+        with tempfile.TemporaryDirectory() as directory:
+            result = run_long_video_selector(
+                "source.mp4", 500.0, Path(directory) / "selection.json",
+                enhanced=True, detector_factory=factory,
+            )
+        self.assertEqual(result["status"], "ENHANCED_SELECTOR_SKIPPED_INSUFFICIENT_DURATION")
         factory.assert_not_called()
 
     @patch("long_video_selector.selector._contact_sheets", return_value=[])
@@ -91,6 +120,16 @@ class LongVideoSelectorTests(unittest.TestCase):
         selected = _select_ranked_ranges(ranked, 1800, 180)
         self.assertEqual(len(selected), 3)
         self.assertEqual(sum(item["topic"] == "same event" for item in selected), 1)
+
+    def test_similar_scores_prefer_temporally_diverse_middle(self):
+        ranked = [
+            {"center": 100, "score": .95, "topic": "start", "reason": "start"},
+            {"center": 350, "score": .92, "topic": "near", "reason": "near"},
+            {"center": 700, "score": .90, "topic": "middle", "reason": "middle"},
+            {"center": 1200, "score": .88, "topic": "end", "reason": "end"},
+        ]
+        selected = _select_ranked_ranges(ranked, 1440, 180)
+        self.assertIn("middle", [item["topic"] for item in selected])
 
     @patch("long_video_selector.selector._contact_sheets", return_value=[])
     @patch("long_video_selector.selector._visual_candidates", return_value=([], []))

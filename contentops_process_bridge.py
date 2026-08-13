@@ -28,7 +28,17 @@ def utc_now() -> str:
     return datetime.now(timezone.utc).isoformat()
 
 
-def _production_part_core(source: Path, output_dir: Path, title: str, job_dir: Path) -> list[Path]:
+def _production_part_core(
+    source: Path, output_dir: Path, title: str, job_dir: Path, *,
+    enhanced_content_selection: bool = False,
+) -> list[Path]:
+    if enhanced_content_selection:
+        from enhanced_content_flow import EnhancedFlowSkipped, run_enhanced_content_flow
+
+        try:
+            return run_enhanced_content_flow(source, output_dir, title, job_dir)
+        except EnhancedFlowSkipped:
+            pass
     from backend.job_runner import _run_semantic_stage
     from formatter.planner import plan_done_job
     from formatter.renderer import render_format_plan
@@ -97,12 +107,16 @@ class ContentOpsProcessBridge:
         temporary.write_text(json.dumps(list(self.records.values()), ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
         os.replace(temporary, self.records_path)
 
-    def _validate(self, payload: Any) -> dict[str, str]:
+    def _validate(self, payload: Any) -> dict[str, Any]:
         if not isinstance(payload, dict):
             raise RequestError("INVALID_REQUEST")
         request = {key: str(payload.get(key) or "").strip() for key in (
             "handoff_id", "source_file", "channel_name", "output_dir", "video_id", "video_title"
         )}
+        enhanced = payload.get("enhanced_content_selection", False)
+        if not isinstance(enhanced, bool):
+            raise RequestError("INVALID_REQUEST")
+        request["enhanced_content_selection"] = enhanced
         if not re.fullmatch(r"[A-Za-z0-9._-]{1,128}", request["handoff_id"]):
             raise RequestError("INVALID_REQUEST")
         if not re.fullmatch(r"[A-Za-z0-9_-]{11}", request["video_id"]):
@@ -170,7 +184,13 @@ class ContentOpsProcessBridge:
                 raise RequestError("NAS_UNAVAILABLE")
             self.report_dir.mkdir(parents=True, exist_ok=True)
             self._update(handoff_id, state="PROCESSING", progress_percent=5, error=None)
-            outputs = self.core(source, output_dir, request["video_title"], job_dir)
+            if request.get("enhanced_content_selection"):
+                outputs = self.core(
+                    source, output_dir, request["video_title"], job_dir,
+                    enhanced_content_selection=True,
+                )
+            else:
+                outputs = self.core(source, output_dir, request["video_title"], job_dir)
             if not outputs or not all(path.is_file() for path in outputs):
                 raise RuntimeError("formatter completed without all outputs")
             self._update(handoff_id, state="FINALIZING", progress_percent=95)
