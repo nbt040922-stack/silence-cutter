@@ -20,6 +20,90 @@ from .content_boundary import (
 )
 
 
+def _intersect_ranges(
+    ranges: list[dict[str, float]], start: float, end: float,
+) -> list[dict[str, float]]:
+    result = []
+    for item in sorted(ranges, key=lambda value: value["start"]):
+        left, right = max(start, float(item["start"])), min(end, float(item["end"]))
+        if left < right:
+            result.append({"start": left, "end": right})
+    return result
+
+
+def _complement_ranges(
+    ranges: list[dict[str, float]], duration: float, reason: str,
+) -> list[dict[str, Any]]:
+    result, cursor = [], 0.0
+    for item in ranges:
+        if cursor < item["start"]:
+            result.append({"start": cursor, "end": item["start"], "reason": reason})
+        cursor = item["end"]
+    if cursor < duration:
+        result.append({"start": cursor, "end": duration, "reason": reason})
+    return result
+
+
+def _analyze_allowed_ranges(
+    full_audio_path: Path,
+    directory: Path,
+    ranges: list[dict[str, float]],
+    *,
+    config: HighRecallConfig,
+    detector: SenseVoiceDetector,
+) -> tuple[dict[str, Any], list[SpeechInterval]]:
+    analyses: list[tuple[dict[str, Any], float]] = []
+    disagreements: list[SpeechInterval] = []
+    for index, scope in enumerate(ranges):
+        duration = scope["end"] - scope["start"]
+        audio = slice_analysis_wav(
+            full_audio_path, directory / f"allowed-{index:02d}.wav",
+            scope["start"], scope["end"],
+        )
+        result, local_disagreements = analyze_audio(
+            audio, duration, config=config, sensevoice_detector=detector, known_gap_path=None,
+        )
+        analyses.append((result, scope["start"]))
+        disagreements.extend(
+            SpeechInterval(item.start + scope["start"], item.end + scope["start"], item.source)
+            for item in local_disagreements
+        )
+
+    interval_keys = (
+        "silero_intervals", "sensevoice_intervals", "union_intervals",
+        "final_keep_intervals", "final_cut_intervals",
+    )
+    combined: dict[str, Any] = {key: [] for key in interval_keys}
+    for result, offset in analyses:
+        for key in interval_keys:
+            combined[key].extend(
+                item | {"start": float(item["start"]) + offset, "end": float(item["end"]) + offset}
+                for item in result[key]
+            )
+    metrics = dict(analyses[0][0]["metrics"])
+    summed = {
+        "silero_speech_duration", "sensevoice_speech_duration", "union_speech_duration",
+        "silero_interval_count", "sensevoice_interval_count", "union_interval_count",
+        "silero_only_duration", "sensevoice_only_duration", "overlap_duration",
+        "final_keep_duration", "final_cut_duration", "sensevoice_model_load_time",
+        "sensevoice_inference_time", "silero_processing_time", "detector_wall_time",
+        "fusion_processing_time", "timeline_processing_time", "core_analysis_time",
+        "sensevoice_raw_asr_segment_count", "sensevoice_raw_asr_segment_duration",
+        "sensevoice_fine_speech_interval_count", "sensevoice_fine_speech_duration",
+    }
+    for key in summed:
+        metrics[key] = sum(float(result["metrics"].get(key, 0)) for result, _ in analyses)
+    for key in ("largest_sensevoice_asr_segment", "largest_sensevoice_fine_speech_interval"):
+        metrics[key] = max(float(result["metrics"].get(key, 0)) for result, _ in analyses)
+    metrics["removed_percentage"] = (
+        metrics["final_cut_duration"] / sum(item["end"] - item["start"] for item in ranges) * 100
+    )
+    combined["metrics"] = metrics
+    combined["audio_duration"] = sum(item["end"] - item["start"] for item in ranges)
+    combined["config"] = config.to_dict()
+    return combined, sorted(disagreements, key=lambda item: (item.start, item.end))
+
+
 @dataclass(frozen=True, slots=True)
 class BrandingTailConfig:
     window: float = 10.0
@@ -226,6 +310,7 @@ class ProductionRuntime:
         boundary_config: BoundaryConfig | None = None,
         branding_tail_config: BrandingTailConfig | None = None,
         visual_safety_config: VisualSafetyConfig | None = None,
+        allowed_ranges: list[dict[str, float]] | None = None,
     ) -> dict[str, Any]:
         started = time.perf_counter()
         source = Path(input_path).expanduser().resolve()
@@ -259,35 +344,46 @@ class ProductionRuntime:
             intro_boundary_time = boundary_report["intro_boundary_time"]
             outro_boundary_time = boundary_report["outro_boundary_time"]
             content_duration = window.end - window.start
-            audio_path = (
-                full_audio_path
-                if window.start == 0 and window.end == input_duration
-                else slice_analysis_wav(
-                    full_audio_path, directory_path / "content.wav", window.start, window.end
-                )
+            scoped_ranges = (
+                _intersect_ranges(allowed_ranges, window.start, window.end)
+                if allowed_ranges else []
             )
+            if allowed_ranges and not scoped_ranges:
+                raise ValueError("long-video selected ranges do not intersect content window")
             speech_started = time.perf_counter()
-            analysis, disagreements = analyze_audio(
-                audio_path,
-                content_duration,
-                config=self.config,
-                sensevoice_detector=self.detector,
-                known_gap_path=None,
-            )
+            if scoped_ranges:
+                analysis, disagreements = _analyze_allowed_ranges(
+                    full_audio_path, directory_path, scoped_ranges,
+                    config=self.config, detector=self.detector,
+                )
+            else:
+                audio_path = (
+                    full_audio_path
+                    if window.start == 0 and window.end == input_duration
+                    else slice_analysis_wav(
+                        full_audio_path, directory_path / "content.wav", window.start, window.end
+                    )
+                )
+                analysis, disagreements = analyze_audio(
+                    audio_path, content_duration, config=self.config,
+                    sensevoice_detector=self.detector, known_gap_path=None,
+                )
             speech_analysis_time = time.perf_counter() - speech_started
         analysis_time = time.perf_counter() - started
+        analysis_origin = 0.0 if scoped_ranges else window.start
         def shift(items: list[dict[str, Any]]) -> list[dict[str, Any]]:
             return [
                 item | {
-                    "start": float(item["start"]) + window.start,
-                    "end": float(item["end"]) + window.start,
+                    "start": float(item["start"]) + analysis_origin,
+                    "end": float(item["end"]) + analysis_origin,
                 }
                 for item in items
             ]
 
         shifted_union = shift(analysis["union_intervals"])
         keep = shift(analysis["final_keep_intervals"])
-        greeting_enabled = content_start is None and not keep_intro_outro
+        scope_covers_content_start = not scoped_ranges or scoped_ranges[0]["start"] <= window.start
+        greeting_enabled = content_start is None and not keep_intro_outro and scope_covers_content_start
         keep, greeting_cuts, greeting_debug, intro_fusion = _apply_intro_greeting_heuristic(
             keep,
             shifted_union,
@@ -297,7 +393,7 @@ class ProductionRuntime:
             structural_confidence=float(
                 boundary_report.get("intro_confidence", window.intro_confidence)
             ),
-            timeline_covers_start=window.start == 0.0,
+            timeline_covers_start=window.start == 0.0 and scope_covers_content_start,
         )
         keep, branding_tail_cuts = _remove_intro_branding_tail(
             keep,
@@ -306,7 +402,7 @@ class ProductionRuntime:
                 boundary_report["detected_intro_boundary"],
                 content_start,
                 keep_intro_outro,
-            ),
+            ) and scope_covers_content_start,
             config=branding_tail_config or BrandingTailConfig(),
         )
         visual_config = visual_safety_config or VisualSafetyConfig()
@@ -317,19 +413,24 @@ class ProductionRuntime:
                 boundary_report["detected_intro_boundary"],
                 content_start,
                 keep_intro_outro,
-            ),
+            ) and scope_covers_content_start,
             config=visual_config,
         )
         silence_cuts = [item | {"reason": "silence"} for item in shift(analysis["final_cut_intervals"])]
+        selector_cuts = (
+            _complement_ranges(scoped_ranges, input_duration, "long_video_unselected")
+            if scoped_ranges else []
+        )
         boundary_cuts = []
-        if window.start > 0:
-            boundary_cuts.append({"start": 0.0, "end": window.start, "reason": "intro"})
-        if window.end < input_duration:
-            boundary_cuts.append({"start": window.end, "end": input_duration, "reason": "outro"})
+        if not scoped_ranges:
+            if window.start > 0:
+                boundary_cuts.append({"start": 0.0, "end": window.start, "reason": "intro"})
+            if window.end < input_duration:
+                boundary_cuts.append({"start": window.end, "end": input_duration, "reason": "outro"})
         cut = sorted(
             [
                 *boundary_cuts, *greeting_cuts, *branding_tail_cuts,
-                *visual_safety_cuts, *silence_cuts,
+                *visual_safety_cuts, *silence_cuts, *selector_cuts,
             ],
             key=lambda item: item["start"],
         )
@@ -338,11 +439,11 @@ class ProductionRuntime:
             if known_gap_path is not None else None
         )
         shifted_silero = [
-            SpeechInterval(item["start"] + window.start, item["end"] + window.start, "silero")
+            SpeechInterval(item["start"] + analysis_origin, item["end"] + analysis_origin, "silero")
             for item in analysis["silero_intervals"]
         ]
         shifted_sensevoice = [
-            SpeechInterval(item["start"] + window.start, item["end"] + window.start, "sensevoice")
+            SpeechInterval(item["start"] + analysis_origin, item["end"] + analysis_origin, "sensevoice")
             for item in analysis["sensevoice_intervals"]
         ]
         known = known_gap_metrics(
@@ -367,6 +468,7 @@ class ProductionRuntime:
             branding_tail_cuts = []
             visual_safety_cuts = []
             greeting_cuts = []
+            selector_cuts = []
 
         render_time = 0.0
         render_diagnostics: dict[str, Any] = {}
@@ -408,10 +510,12 @@ class ProductionRuntime:
         outro_removed_duration = sum(
             item["end"] - item["start"] for item in boundary_cuts if item["reason"] == "outro"
         )
+        selector_removed_duration = sum(item["end"] - item["start"] for item in selector_cuts)
         cut_duration = (
             silence_removed_duration + branding_tail_removed_duration
             + visual_safety_removed_duration + greeting_removed_duration
             + structural_intro_removed_duration + outro_removed_duration
+            + selector_removed_duration
         )
         report = {
             "input_duration": input_duration,
@@ -438,6 +542,9 @@ class ProductionRuntime:
             "intro_visual_tail_removed_duration": visual_safety_removed_duration,
             "outro_removed_duration": outro_removed_duration,
             "silence_removed_duration": silence_removed_duration,
+            "long_video_selector_applied": bool(scoped_ranges),
+            "long_video_selected_ranges": scoped_ranges,
+            "long_video_unselected_duration": selector_removed_duration,
             "branding_tail_detected": bool(branding_tail_cuts),
             "branding_tail_intervals": [
                 {"start": item["start"], "end": item["end"]}
@@ -524,8 +631,8 @@ class ProductionRuntime:
                 "intro_fusion": intro_fusion,
                 "disagreements": [
                     item.to_dict() | {
-                        "start": item.start + window.start,
-                        "end": item.end + window.start,
+                        "start": item.start + (0.0 if scoped_ranges else window.start),
+                        "end": item.end + (0.0 if scoped_ranges else window.start),
                         "duration": item.end - item.start,
                         "detector": item.source,
                     }

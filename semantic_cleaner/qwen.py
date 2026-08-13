@@ -99,9 +99,9 @@ def _font(size: int) -> ImageFont.ImageFont:
 
 def _contact_sheets(
     paths: list[Path], timestamps: list[float], *, cells: int = 16,
+    columns: int = 4, cell_width: int = 240, cell_height: int = 150,
 ) -> list[Image.Image]:
     sheets: list[Image.Image] = []
-    columns, cell_width, cell_height = 4, 240, 150
     for offset in range(0, len(paths), cells):
         chunk_paths = paths[offset:offset + cells]
         chunk_times = timestamps[offset:offset + cells]
@@ -116,7 +116,10 @@ def _contact_sheets(
             x, y = local % columns * cell_width, local // columns * cell_height
             sheet.paste(frame, (x + (cell_width - frame.width) // 2, y + 28))
             draw = ImageDraw.Draw(sheet)
-            draw.text((x + 4, y + 3), f"TIME {timestamp:.1f}s", fill="yellow", font=_font(18))
+            draw.text(
+                (x + 4, y + 3), f"TIME {timestamp:.1f}s", fill="yellow",
+                font=_font(18 if cell_width >= 240 else 13),
+            )
         sheets.append(sheet)
     return sheets
 
@@ -280,22 +283,29 @@ class QwenSemanticDetector:
         self.model_load_time = time.perf_counter() - loaded
         self.generation_count = 0
 
-    def _classify(self, images: list[Image.Image], prompt: str) -> list[dict[str, Any]]:
+    def generate_text(
+        self, images: list[Image.Image], prompt: str, *, max_new_tokens: int | None = None,
+    ) -> str:
         messages = [{"role": "user", "content": [
             *({"type": "image", "image": image} for image in images),
             {"type": "text", "text": prompt},
         ]}]
         text = self.processor.apply_chat_template(messages, tokenize=False, add_generation_prompt=True)
-        inputs = self.processor(text=[text], images=images, padding=True, return_tensors="pt").to(self.model.device)
+        processor_args = {"text": [text], "padding": True, "return_tensors": "pt"}
+        if images:
+            processor_args["images"] = images
+        inputs = self.processor(**processor_args).to(self.model.device)
         self.generation_count += 1
-        max_tokens = int(os.environ.get("SEMANTIC_MAX_NEW_TOKENS", "32"))
+        max_tokens = max_new_tokens or int(os.environ.get("SEMANTIC_MAX_NEW_TOKENS", "32"))
         with self.torch.inference_mode():
             generated = self.model.generate(**inputs, max_new_tokens=max_tokens, do_sample=False)
-        response = self.processor.batch_decode(
+        return self.processor.batch_decode(
             generated[:, inputs.input_ids.shape[1]:], skip_special_tokens=True,
             clean_up_tokenization_spaces=False,
         )[0]
-        return _semantic_response(response)
+
+    def _classify(self, images: list[Image.Image], prompt: str) -> list[dict[str, Any]]:
+        return _semantic_response(self.generate_text(images, prompt))
 
     def _classify_with_oom_fallback(
         self, images: list[Image.Image], prompt: str,

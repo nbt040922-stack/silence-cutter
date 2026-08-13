@@ -217,6 +217,48 @@ class JobRunnerTests(unittest.TestCase):
         }, now=110)
         self.assertEqual(snapshot["total_eta_seconds"], 160)
 
+    @patch("silence_cutter.audio.probe_media", return_value={"duration": 900.0})
+    @patch("backend.job_runner.subprocess.run")
+    def test_normal_video_does_not_invoke_long_selector(self, run, _probe):
+        job_dir = self.root / "job"
+        job_dir.mkdir()
+        (job_dir / "logs").mkdir()
+        result = job_runner._run_long_video_stage({}, job_dir, job_dir / "source.mp4")
+        self.assertEqual(result["status"], "NOT_APPLICABLE")
+        run.assert_not_called()
+
+    @patch("silence_cutter.audio.probe_media", return_value={"duration": 901.0})
+    @patch("backend.job_runner.subprocess.run")
+    def test_long_selector_timeout_fails_open(self, run, _probe):
+        import subprocess
+        run.side_effect = subprocess.TimeoutExpired("selector", 90)
+        job_dir = self.root / "job"
+        job_dir.mkdir()
+        (job_dir / "logs").mkdir()
+        result = job_runner._run_long_video_stage({}, job_dir, job_dir / "source.mp4")
+        self.assertEqual(result["status"], "LONG_VIDEO_SELECTOR_SKIPPED")
+        self.assertEqual(result["selected_ranges"], [])
+
+    @patch.object(job_runner, "_run_process")
+    def test_applied_selection_is_passed_to_production(self, run):
+        job_dir = self.root / "job"
+        job_dir.mkdir()
+        source = job_dir / "source.mp4"
+        source.write_bytes(b"source")
+        job_runner._atomic_json(job_dir / "long_video_selection.json", {
+            "status": "APPLIED", "selected_ranges": [
+                {"start": 0, "end": 180, "score": .9},
+                {"start": 300, "end": 480, "score": .8},
+                {"start": 600, "end": 780, "score": .7},
+            ],
+        })
+        def complete(command, _job, directory):
+            (directory / "pipeline_report.json").write_text("{}", encoding="utf-8")
+        run.side_effect = complete
+        job_runner._pipeline({}, job_dir, source)
+        command = run.call_args.args[0]
+        self.assertIn("--allowed-ranges-json", command)
+
     def test_local_folder_settings_persist_after_restart(self):
         saved = job_runner.save_settings({
             "input_folder": str(self.root / "incoming"),

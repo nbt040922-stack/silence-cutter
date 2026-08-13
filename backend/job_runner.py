@@ -1179,10 +1179,55 @@ def _pipeline(job: dict[str, Any], job_dir: Path, source: Path) -> tuple[Path | 
         sys.executable, "-m", "production", str(source), "-o", str(rendered),
         "--report", str(report), "--debug", "--analysis-only",
     ]
+    selection = job_dir / "long_video_selection.json"
+    if selection.is_file():
+        try:
+            if json.loads(selection.read_text(encoding="utf-8")).get("status") == "APPLIED":
+                command.extend(["--allowed-ranges-json", str(selection)])
+        except (OSError, json.JSONDecodeError):
+            pass
     _run_process(command, job, job_dir)
     if not report.is_file():
         raise RuntimeError("production analysis completed without report")
     return None, report
+
+
+def _run_long_video_stage(job: dict[str, Any], job_dir: Path, source: Path) -> dict[str, Any]:
+    from long_video_selector.selector import LongVideoSelectorConfig
+    from silence_cutter.audio import probe_media
+
+    artifact = job_dir / "long_video_selection.json"
+    config = LongVideoSelectorConfig.from_environment()
+    try:
+        duration = float(probe_media(source)["duration"])
+        if duration <= config.threshold:
+            result = {"status": "NOT_APPLICABLE", "source_duration": duration,
+                      "threshold": config.threshold, "selected_ranges": []}
+            _atomic_json(artifact, result)
+            return result
+        command = [
+            sys.executable, "-m", "long_video_selector", str(source),
+            "--output", str(artifact),
+        ]
+        timeout = float(os.environ.get("LONG_VIDEO_SELECTOR_TIMEOUT", "90"))
+        completed = subprocess.run(
+            command, capture_output=True, text=True, encoding="utf-8", errors="replace",
+            env=_utf8_environment(), timeout=timeout,
+            creationflags=0x08000000 if os.name == "nt" else 0,
+        )
+        if completed.returncode:
+            detail = (completed.stderr or completed.stdout or "selector subprocess failed").strip()
+            raise RuntimeError(detail[-2000:])
+        result = json.loads(artifact.read_text(encoding="utf-8"))
+    except subprocess.TimeoutExpired:
+        result = {"status": "LONG_VIDEO_SELECTOR_SKIPPED", "threshold": config.threshold,
+                  "selected_ranges": [], "reason": "selector timed out"}
+    except Exception as exc:
+        result = {"status": "LONG_VIDEO_SELECTOR_SKIPPED", "threshold": config.threshold,
+                  "selected_ranges": [], "reason": f"{type(exc).__name__}: {exc}"}
+    _atomic_json(artifact, result)
+    _log(job_dir, f"Long video selector: {result['status']}")
+    return result
 
 
 def _run_semantic_stage(job: dict[str, Any], job_dir: Path, source: Path, report: Path) -> dict[str, Any]:
@@ -1316,6 +1361,7 @@ def _process_ready_job(
         )
         _write_job(job, settings)
         _log(job_dir, "Production pipeline started")
+        long_selection = _run_long_video_stage(job, job_dir, source)
         rendered, report = pipeline(job, job_dir, source)
         semantic = _run_semantic_stage(job, job_dir, source, report)
         analysis_time = time.perf_counter() - analysis_wall_started
@@ -1358,6 +1404,10 @@ def _process_ready_job(
             semantic_cleaner_status=semantic.get("status"),
             semantic_segments_path=str((job_dir / "semantic_segments.json").resolve()),
             semantic_processing_time=semantic.get("total_additional_processing_time"),
+            long_video_selector_status=long_selection.get("status"),
+            long_video_selection_path=str((job_dir / "long_video_selection.json").resolve()),
+            long_video_selected_ranges=long_selection.get("selected_ranges") or [],
+            long_video_selector_time=long_selection.get("total_processing_time"),
             clean_video_duration=clean_duration,
         )
         _write_job(job, settings)

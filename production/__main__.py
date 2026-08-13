@@ -22,11 +22,16 @@ def _parser() -> argparse.ArgumentParser:
     parser.add_argument("--intro-search-window", type=float, default=120.0)
     parser.add_argument("--outro-search-window", type=float, default=60.0)
     parser.add_argument("--post-intro-trim", type=float, default=2.0)
+    parser.add_argument("--allowed-ranges-json", type=Path)
     return parser
 
 
 def main() -> None:
     args = _parser().parse_args()
+    allowed_ranges = None
+    if args.allowed_ranges_json:
+        selection = json.loads(args.allowed_ranges_json.read_text(encoding="utf-8"))
+        allowed_ranges = selection.get("selected_ranges")
     result = ProductionRuntime().process(
         args.input,
         args.output,
@@ -42,6 +47,7 @@ def main() -> None:
             outro_search_window=args.outro_search_window,
             post_intro_trim=args.post_intro_trim,
         ),
+        allowed_ranges=allowed_ranges,
     )
     print(json.dumps(result, indent=2))
 
