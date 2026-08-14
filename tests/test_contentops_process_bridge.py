@@ -49,7 +49,7 @@ def test_submit_is_idempotent_and_returns_exact_part_paths(tmp_path, media):
         for part in parts:
             part.write_bytes(b"processed")
         return parts
-    bridge = ContentOpsProcessBridge(records_path=tmp_path / "records.json", core=core)
+    bridge = ContentOpsProcessBridge(records_path=tmp_path / "records.json", core=core, qwen_health=lambda: True)
     created, first = bridge.submit(request(source, output))
     duplicate, second = bridge.submit(request(source, output))
     result = wait_done(bridge, first["external_id"])
@@ -63,6 +63,18 @@ def test_submit_is_idempotent_and_returns_exact_part_paths(tmp_path, media):
     assert source.read_bytes() == b"source"
     source.unlink()
     assert bridge.submit(request(source, output))[0] is False
+    bridge.close()
+
+
+def test_enhanced_request_requires_ready_qwen(tmp_path, media):
+    source, output = media
+    bridge = ContentOpsProcessBridge(
+        records_path=tmp_path / "records.json", core=lambda *_: None,
+        qwen_health=lambda: False,
+    )
+    with pytest.raises(RequestError, match="QWEN_WORKER_UNAVAILABLE"):
+        bridge.submit(request(source, output, enhanced_content_selection=True))
+    assert bridge.records == {}
     bridge.close()
 
 
@@ -86,7 +98,7 @@ def test_enhanced_flag_is_explicit_and_omitted_keeps_old_core_contract(tmp_path,
         target = output / "PART_1.mp4"
         target.write_bytes(b"ok")
         return [target]
-    bridge = ContentOpsProcessBridge(records_path=tmp_path / "records.json", core=core)
+    bridge = ContentOpsProcessBridge(records_path=tmp_path / "records.json", core=core, qwen_health=lambda: True)
     _, normal = bridge.submit(request(source, output, handoff_id="normal"))
     wait_done(bridge, normal["external_id"])
     _, enhanced = bridge.submit(request(
@@ -215,4 +227,21 @@ def test_localhost_http_contract(tmp_path, media):
     wait_done(bridge, created["external_id"])
     status, fetched = http_json("GET", f"http://{host}:{port}/api/process-jobs/{created['external_id']}")
     assert status == 200 and fetched["state"] == "DONE"
+    bridge.close()
+
+
+def test_http_enhanced_request_returns_retryable_unavailable(tmp_path, media):
+    source, output = media
+    bridge = ContentOpsProcessBridge(
+        records_path=tmp_path / "records.json", port=0, core=lambda *_: [],
+        qwen_health=lambda: False,
+    )
+    host, port = bridge.start()
+    status, result = http_json(
+        "POST", f"http://{host}:{port}/api/process-jobs",
+        request(source, output, enhanced_content_selection=True),
+    )
+    assert status == 503
+    assert result["error"] == "QWEN_WORKER_UNAVAILABLE"
+    assert bridge.records == {}
     bridge.close()

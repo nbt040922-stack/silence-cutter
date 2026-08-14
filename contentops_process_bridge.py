@@ -4,6 +4,8 @@ import json
 import os
 import re
 import threading
+import urllib.error
+import urllib.request
 import uuid
 from concurrent.futures import ThreadPoolExecutor
 from datetime import datetime, timezone
@@ -26,6 +28,19 @@ class RequestError(ValueError):
 
 def utc_now() -> str:
     return datetime.now(timezone.utc).isoformat()
+
+
+def qwen_ready() -> bool:
+    try:
+        with urllib.request.urlopen("http://127.0.0.1:8792/health", timeout=2) as response:
+            health = json.loads(response.read().decode("utf-8"))
+        return bool(
+            health.get("status") == "READY"
+            and health.get("model_loaded")
+            and health.get("warmed_up")
+        )
+    except (OSError, urllib.error.URLError, ValueError):
+        return False
 
 
 def _production_part_core(
@@ -89,6 +104,7 @@ class ContentOpsProcessBridge:
         host: str = LOOPBACK,
         max_concurrency: int = 1,
         core: Callable[[Path, Path, str, Path], list[Path]] = _production_part_core,
+        qwen_health: Callable[[], bool] = qwen_ready,
     ) -> None:
         if host != LOOPBACK:
             raise ValueError("Content Ops bridge must bind to 127.0.0.1")
@@ -96,6 +112,7 @@ class ContentOpsProcessBridge:
         self.records_path = records_path or data_root / "workspace" / "contentops-process-jobs.json"
         self.report_dir = self.records_path.parent / "contentops-process-reports"
         self.port, self.host, self.core = port, host, core
+        self.qwen_health = qwen_health
         self.records: dict[str, dict[str, Any]] = {}
         self._lock = threading.RLock()
         self._executor = ThreadPoolExecutor(max_workers=max(1, max_concurrency), thread_name_prefix="contentops-process")
@@ -127,6 +144,8 @@ class ContentOpsProcessBridge:
         if not isinstance(enhanced, bool):
             raise RequestError("INVALID_REQUEST")
         request["enhanced_content_selection"] = enhanced
+        if enhanced and not self.qwen_health():
+            raise RequestError("QWEN_WORKER_UNAVAILABLE")
         if not re.fullmatch(r"[A-Za-z0-9._-]{1,128}", request["handoff_id"]):
             raise RequestError("INVALID_REQUEST")
         if not re.fullmatch(r"[A-Za-z0-9_-]{11}", request["video_id"]):
@@ -278,7 +297,8 @@ class ContentOpsProcessBridge:
                     created, record = bridge.submit(json.loads(self.rfile.read(size)))
                     self.send_json(201 if created else 200, record)
                 except RequestError as exc:
-                    self.send_json(422 if exc.code in {"SOURCE_FILE_MISSING", "NAS_UNAVAILABLE"} else 400, {"error": exc.code})
+                    status = 503 if exc.code == "QWEN_WORKER_UNAVAILABLE" else 422 if exc.code in {"SOURCE_FILE_MISSING", "NAS_UNAVAILABLE"} else 400
+                    self.send_json(status, {"error": exc.code})
                 except (ValueError, TypeError, json.JSONDecodeError):
                     self.send_json(400, {"error": "INVALID_REQUEST"})
                 except Exception:
