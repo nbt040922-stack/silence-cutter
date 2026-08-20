@@ -119,6 +119,9 @@ function renderJobs() {
       + partButton(`Part ${part.index} Folder`, "folder-part", job.id, part.index)
     ).join("");
     const needsReview = job.formatter_status === "NEEDS_REVIEW";
+    const cleanupStatus = job.source_cleanup_status
+      ? `Source cleanup: ${job.source_cleanup_status}${job.source_cleanup_error ? ` — ${job.source_cleanup_error}` : ""}`
+      : "";
     const actions = [
       local && job.status === "DONE" && !needsReview && job.output_folder ? button("Open Output", "open-output", job.id) : "",
       local && job.status === "DONE" && !needsReview && job.source_path ? button("Open Source Folder", "source-folder", job.id) : "",
@@ -136,7 +139,7 @@ function renderJobs() {
     ].join("");
     return `<tr>
       <td><span class="status status-${statusClass}"><i></i>${visibleStatus}</span></td>
-      <td class="title-cell"><strong title="${escapeHtml(job.display_name || job.title || job.url)}">${escapeHtml(job.display_name || job.title || job.url)}</strong><small>ID: ${escapeHtml((job.id || "").slice(0, 8))}${formatterActive ? ` • PART ${job.formatter_current_part || 1}/${partCount}` : ""}</small>${job.error || job.formatter_error ? `<em title="${escapeHtml(job.error || job.formatter_error)}">${escapeHtml(job.error || job.formatter_error)}</em>` : ""}</td>
+      <td class="title-cell"><strong title="${escapeHtml(job.display_name || job.title || job.url)}">${escapeHtml(job.display_name || job.title || job.url)}</strong><small>ID: ${escapeHtml((job.id || "").slice(0, 8))}${formatterActive ? ` • PART ${job.formatter_current_part || 1}/${partCount}` : ""}</small>${job.error || job.formatter_error ? `<em title="${escapeHtml(job.error || job.formatter_error)}">${escapeHtml(job.error || job.formatter_error)}</em>` : ""}${cleanupStatus ? `<em title="${escapeHtml(cleanupStatus)}">${escapeHtml(cleanupStatus)}</em>` : ""}</td>
       <td>${formatDuration(job.duration)}</td>
       <td class="progress-cell">${overallProgressMarkup(job)}</td>
       <td>${totalTimerMarkup(job)}</td>

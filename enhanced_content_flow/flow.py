@@ -29,6 +29,14 @@ class EnhancedFlowSkipped(RuntimeError):
     pass
 
 
+class EnhancedFlowError(RuntimeError):
+    """Unexpected enhanced infrastructure/processing failure.
+
+    Selection constraints use EnhancedFlowSkipped and fail open; unexpected
+    errors remain real failures so they are not silently hidden by fallback.
+    """
+
+
 _RUNTIME: ProductionRuntime | None = None
 _RUNTIME_LOCK = threading.Lock()
 
@@ -313,6 +321,8 @@ def run_enhanced_content_flow(
         _write(artifact_path, artifact)
         shutil.rmtree(visual_cache, ignore_errors=True)
         return outputs
+    except EnhancedFlowSkipped:
+        raise
     except Exception as exc:
         artifact = {
             "status": "ENHANCED_CONTENT_SELECTION_SKIPPED", "source_duration": duration,
@@ -322,4 +332,4 @@ def run_enhanced_content_flow(
         }
         _write(artifact_path, artifact)
         shutil.rmtree(visual_cache, ignore_errors=True)
-        raise EnhancedFlowSkipped(artifact["reason"]) from exc
+        raise EnhancedFlowError(artifact["reason"]) from exc

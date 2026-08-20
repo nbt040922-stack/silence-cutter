@@ -1,9 +1,11 @@
 from __future__ import annotations
 
 import json
+import hashlib
 import os
 import re
 import threading
+import traceback
 import urllib.error
 import urllib.request
 import uuid
@@ -24,6 +26,13 @@ class RequestError(ValueError):
     def __init__(self, code: str):
         super().__init__(code)
         self.code = code
+
+
+class ProcessingStageError(RuntimeError):
+    def __init__(self, stage: str, cause: Exception):
+        super().__init__(str(cause))
+        self.stage = stage
+        self.cause = cause
 
 
 def utc_now() -> str:
@@ -47,33 +56,53 @@ def _production_part_core(
     source: Path, output_dir: Path, title: str, job_dir: Path, *,
     enhanced_content_selection: bool = False,
 ) -> list[Path]:
+    enhanced_status = "NOT_REQUESTED"
+    enhanced_reason = None
     if enhanced_content_selection:
         from enhanced_content_flow import EnhancedFlowSkipped, run_enhanced_content_flow
 
         try:
-            return run_enhanced_content_flow(source, output_dir, title, job_dir)
-        except EnhancedFlowSkipped:
-            pass
-    from backend.job_runner import _run_semantic_stage
+            outputs = run_enhanced_content_flow(source, output_dir, title, job_dir)
+            return outputs
+        except EnhancedFlowSkipped as exc:
+            enhanced_status = "NOT_USABLE"
+            enhanced_reason = str(exc)
+    from backend.job_runner import _pipeline, _run_semantic_stage
     from formatter.planner import plan_done_job
     from formatter.renderer import render_format_plan
     from formatter.title_rewrite import rewrite_title_once
-    from production import process_video
 
     job_dir.mkdir(parents=True, exist_ok=True)
+    (job_dir / "logs").mkdir(parents=True, exist_ok=True)
     report = job_dir / "pipeline_report.json"
-    process_video(
-        source, job_dir / "rendered.mp4", analysis_only=True,
-        debug=True, report_path=report,
-    )
-    _run_semantic_stage({}, job_dir, source, report)
+    # Reuse the canonical analysis entrypoint.  The old adapter called
+    # production.process_video directly and then assembled a partial job,
+    # which could diverge from the proven normal pipeline.
+    analysis_job = {
+        # The canonical runner requires a UUID-shaped job id for its own
+        # progress bookkeeping; bridge handoff ids intentionally are not UUIDs.
+        "id": hashlib.sha256(job_dir.name.encode("utf-8")).hexdigest()[:32],
+        "title": title, "source_path": str(source),
+        "status": "ANALYZING", "progress": None, "error": None,
+    }
+    try:
+        _pipeline(analysis_job, job_dir, source)
+    except Exception as exc:
+        raise ProcessingStageError("FALLBACK", exc) from exc
+    try:
+        _run_semantic_stage({}, job_dir, source, report)
+    except Exception as exc:
+        raise ProcessingStageError("SEMANTIC", exc) from exc
     try:
         source_id = json.loads((job_dir / "request.json").read_text(encoding="utf-8")).get("video_id")
     except (OSError, ValueError):
         source_id = job_dir.name
-    rewrite = rewrite_title_once(
-        job_dir, title, output_dir, source_id=source_id, part_count=3,
-    )
+    try:
+        rewrite = rewrite_title_once(
+            job_dir, title, output_dir, source_id=source_id, part_count=3,
+        )
+    except Exception as exc:
+        raise ProcessingStageError("TITLE_REWRITE", exc) from exc
     job_file = job_dir / "job.json"
     job_file.write_text(json.dumps({
         "id": job_dir.name, "status": "DONE", "title": title,
@@ -81,15 +110,24 @@ def _production_part_core(
         "output_folder": str(output_dir), "output_path": None,
         "rewritten_title": rewrite["rewritten_title"],
         "title_rewrite_status": rewrite["status"],
+        "enhanced_selection_status": enhanced_status,
+        "enhanced_fallback_reason": enhanced_reason,
+        "effective_processing_mode": "NORMAL",
     }, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
     plan_path = job_dir / "format_plan.json"
-    plan = plan_done_job(
-        job_file, output_path=plan_path,
-        preview_path=job_dir / "part1_preview.png",
-    )
+    try:
+        plan = plan_done_job(
+            job_file, output_path=plan_path,
+            preview_path=job_dir / "part1_preview.png",
+        )
+    except Exception as exc:
+        raise ProcessingStageError("PLANNER", exc) from exc
     if plan["formatter_status"] != "PLANNED":
         raise RequestError(f"FORMATTER_{plan['formatter_status']}")
-    result = render_format_plan(plan_path)
+    try:
+        result = render_format_plan(plan_path)
+    except Exception as exc:
+        raise ProcessingStageError("RENDER", exc) from exc
     if result["formatter_status"] != "DONE":
         raise RuntimeError(result.get("formatter_error") or "formatter failed")
     return [Path(item["path"]) for item in result["formatted_outputs"]]
@@ -206,6 +244,7 @@ class ContentOpsProcessBridge:
         request = record["request"]
         source, output_dir = Path(request["source_file"]), Path(request["output_dir"])
         job_dir = self.report_dir / record["external_id"]
+        stage = "validate"
         try:
             if not source.is_file():
                 raise RequestError("SOURCE_FILE_MISSING")
@@ -213,17 +252,21 @@ class ContentOpsProcessBridge:
                 raise RequestError("NAS_UNAVAILABLE")
             self.report_dir.mkdir(parents=True, exist_ok=True)
             job_dir.mkdir(parents=True, exist_ok=True)
+            stage = "write_request"
             (job_dir / "request.json").write_text(
                 json.dumps(request, ensure_ascii=False, indent=2) + "\n", encoding="utf-8",
             )
             self._update(handoff_id, state="PROCESSING", progress_percent=5, error=None)
             if request.get("enhanced_content_selection"):
+                stage = "enhanced_content_selection"
                 outputs = self.core(
                     source, output_dir, request["video_title"], job_dir,
                     enhanced_content_selection=True,
                 )
             else:
+                stage = "normal_processing"
                 outputs = self.core(source, output_dir, request["video_title"], job_dir)
+            stage = "validate_outputs"
             if not outputs or not all(path.is_file() for path in outputs):
                 raise RuntimeError("formatter completed without all outputs")
             self._update(handoff_id, state="FINALIZING", progress_percent=95)
@@ -234,7 +277,29 @@ class ContentOpsProcessBridge:
             )
         except Exception as exc:
             code = exc.code if isinstance(exc, RequestError) else "PROCESSING_FAILED"
-            self._update(handoff_id, state="FAILED", error=code, progress_percent=0)
+            root = exc.cause if isinstance(exc, ProcessingStageError) else exc
+            detail = str(root).strip() or type(root).__name__
+            safe_detail = detail[-1000:]
+            diagnostic = {
+                "stage": exc.stage if isinstance(exc, ProcessingStageError) else locals().get("stage", "unknown"),
+                "error_type": type(root).__name__,
+                "error": safe_detail,
+            }
+            traceback_path = job_dir / "failure_traceback.log"
+            try:
+                traceback_path.write_text(traceback.format_exc(), encoding="utf-8")
+                (job_dir / "failure_diagnostic.json").write_text(
+                    json.dumps(diagnostic, ensure_ascii=False, indent=2) + "\n",
+                    encoding="utf-8",
+                )
+            except OSError:
+                pass
+            self._update(
+                handoff_id, state="FAILED", error=code, progress_percent=0,
+                failure_stage=diagnostic["stage"], failure_type=diagnostic["error_type"],
+                failure_detail=safe_detail,
+                failure_traceback_path=str(traceback_path.resolve()),
+            )
 
     def restore(self) -> None:
         with self._lock:

@@ -1,3 +1,3 @@
-from .flow import EnhancedFlowSkipped, run_enhanced_content_flow
+from .flow import EnhancedFlowError, EnhancedFlowSkipped, run_enhanced_content_flow
 
-__all__ = ["EnhancedFlowSkipped", "run_enhanced_content_flow"]
+__all__ = ["EnhancedFlowError", "EnhancedFlowSkipped", "run_enhanced_content_flow"]

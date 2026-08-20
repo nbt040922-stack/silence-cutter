@@ -123,7 +123,7 @@ def test_production_core_reuses_existing_planner_and_renderer(tmp_path, media):
     for part in parts:
         part.write_bytes(b"part")
     with (
-        patch("production.process_video") as process,
+        patch("backend.job_runner._pipeline") as process,
         patch("backend.job_runner._run_semantic_stage", return_value={"status": "APPLIED"}) as semantic,
         patch("formatter.planner.plan_done_job", return_value={"formatter_status": "PLANNED"}) as plan,
         patch("formatter.renderer.render_format_plan", return_value={
@@ -133,8 +133,8 @@ def test_production_core_reuses_existing_planner_and_renderer(tmp_path, media):
     ):
         result = _production_part_core(source, output, "Video title", job_dir)
     assert result == parts
-    assert process.call_args.kwargs["analysis_only"] is True
-    assert process.call_args.kwargs["debug"] is True
+    assert len(process.call_args.args[0]["id"]) == 32
+    assert process.call_args.args[2] == source
     semantic.assert_called_once_with({}, job_dir, source, job_dir / "pipeline_report.json")
     assert plan.call_count == render.call_count == 1
     job = json.loads((job_dir / "job.json").read_text(encoding="utf-8"))
@@ -150,7 +150,7 @@ def test_enhanced_failure_falls_open_to_normal_core(tmp_path, media):
     from enhanced_content_flow import EnhancedFlowSkipped
     with (
         patch("enhanced_content_flow.run_enhanced_content_flow", side_effect=EnhancedFlowSkipped("no three parts")) as enhanced,
-        patch("production.process_video"),
+            patch("backend.job_runner._pipeline"),
         patch("backend.job_runner._run_semantic_stage", return_value={"status": "APPLIED"}),
         patch("formatter.planner.plan_done_job", return_value={"formatter_status": "PLANNED"}),
         patch("formatter.renderer.render_format_plan", return_value={
@@ -162,6 +162,25 @@ def test_enhanced_failure_falls_open_to_normal_core(tmp_path, media):
         )
     assert result == parts
     enhanced.assert_called_once()
+    job = json.loads((job_dir / "job.json").read_text(encoding="utf-8"))
+    assert job["enhanced_selection_status"] == "NOT_USABLE"
+    assert job["effective_processing_mode"] == "NORMAL"
+    assert job["enhanced_fallback_reason"] == "no three parts"
+
+
+def test_unexpected_enhanced_error_is_not_silently_fallback(tmp_path, media):
+    source, output = media
+    bridge = ContentOpsProcessBridge(
+        records_path=tmp_path / "records.json",
+        core=lambda *_args, **_kwargs: (_ for _ in ()).throw(RuntimeError("renderer crashed")),
+        qwen_health=lambda: True,
+    )
+    _, record = bridge.submit(request(source, output, enhanced_content_selection=True))
+    result = wait_done(bridge, record["external_id"])
+    assert result["state"] == "FAILED"
+    assert result["failure_stage"] == "enhanced_content_selection"
+    assert result["failure_detail"] == "renderer crashed"
+    bridge.close()
 
 
 def test_failure_removes_partial_and_never_exposes_final(tmp_path, media):
@@ -173,6 +192,15 @@ def test_failure_removes_partial_and_never_exposes_final(tmp_path, media):
     _, record = bridge.submit(request(source, output))
     result = wait_done(bridge, record["external_id"])
     assert (result["state"], result["error"]) == ("FAILED", "PROCESSING_FAILED")
+    assert result["failure_stage"] == "normal_processing"
+    assert result["failure_type"] == "RuntimeError"
+    assert result["failure_detail"] == "render failed"
+    diagnostic = json.loads(
+        (bridge.report_dir / record["external_id"] / "failure_diagnostic.json").read_text()
+    )
+    assert diagnostic == {
+        "stage": "normal_processing", "error_type": "RuntimeError", "error": "render failed",
+    }
     assert not list(output.glob("PART_*.mp4"))
     assert source.is_file()
     bridge.close()

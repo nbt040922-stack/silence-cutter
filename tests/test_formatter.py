@@ -5,7 +5,7 @@ from pathlib import Path
 from unittest.mock import patch
 
 from formatter.planner import (
-    AUTO_FORMAT_MAX_DURATION, PART_BANNER, TITLE_BANNER, VIDEO_PLACEMENT,
+    PART_BANNER, TITLE_BANNER, VIDEO_PLACEMENT,
     build_layout, center_crop_geometry, detect_title_language,
     fit_title, formatter_status, plan_done_job, plan_parts,
 )
@@ -50,7 +50,7 @@ class FormatterTests(unittest.TestCase):
                     duration, [segment(0, duration, 0, duration)]
                 )
                 self.assertEqual(len(parts), part_count)
-        self.assertEqual(formatter_status(1200.1), "NEEDS_REVIEW")
+        self.assertEqual(formatter_status(1200.1), "PLANNED")
 
     def test_two_part_plan_prefers_unequal_natural_boundary(self):
         parts, candidates = plan_parts(540, [
@@ -136,7 +136,7 @@ class FormatterTests(unittest.TestCase):
             {"output_start": 200, "output_end": 540, "source_start": 220, "source_end": 560},
         ])
 
-    def test_auto_format_gate_at_twenty_minutes(self):
+    def test_long_video_has_no_duration_only_review_gate(self):
         for duration in (720, 900, 1080, 1199, 1200):
             with self.subTest(duration=duration):
                 self.assertEqual(formatter_status(duration), "PLANNED")
@@ -147,9 +147,9 @@ class FormatterTests(unittest.TestCase):
                     segment(second, duration, second + 2, duration + 2),
                 ])
                 self.assertEqual(len(parts), 3)
-        self.assertEqual(AUTO_FORMAT_MAX_DURATION, 1200)
-        self.assertEqual(formatter_status(1200.1), "NEEDS_REVIEW")
-        self.assertEqual(formatter_status(1200.1, format_anyway=True), "PLANNED")
+        for duration in (1200.1, 1800.0, 3600.0):
+            self.assertEqual(formatter_status(duration), "PLANNED")
+            self.assertEqual(formatter_status(duration, format_anyway=True), "PLANNED")
 
     def test_six_to_seven_minute_natural_parts_are_accepted(self):
         parts, candidates = plan_parts(1140, [
@@ -359,7 +359,7 @@ class FormatterTests(unittest.TestCase):
             })
             self.assertTrue(plan_path.is_file())
 
-    def test_long_done_job_needs_review_without_preview_or_probe(self):
+    def test_long_done_job_is_planned_without_duration_review(self):
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
             clean = root / "rendered.mp4"
@@ -373,32 +373,18 @@ class FormatterTests(unittest.TestCase):
                 "id": "long", "status": "DONE", "title": "Family vlog",
                 "report_path": str(report), "output_path": str(clean),
             }), encoding="utf-8")
-            (root / "part1_preview.png").write_bytes(b"stale")
             with (
-                patch("formatter.planner.probe_video_geometry") as probe,
-                patch("formatter.preview.render_preview") as preview,
+                patch("formatter.planner.probe_video_geometry", return_value=(1920, 1080)),
+                patch("formatter.preview.render_preview", return_value=root / "part1_preview.png"),
             ):
                 plan = plan_done_job(
                     root, output_path=root / "format_plan.json",
                     preview_path=root / "part1_preview.png",
                 )
-            self.assertEqual(plan["formatter_status"], "NEEDS_REVIEW")
-            self.assertEqual(plan["parts"], [])
-            self.assertIsNone(plan["preview_path"])
-            self.assertFalse((root / "part1_preview.png").exists())
-            probe.assert_not_called()
-            preview.assert_not_called()
-            with (
-                patch("formatter.planner.probe_video_geometry", return_value=(1920, 1080)),
-                patch("formatter.preview.render_preview", return_value=root / "part1_preview.png"),
-            ):
-                forced = plan_done_job(
-                    root, output_path=root / "format_plan.json",
-                    preview_path=root / "part1_preview.png", format_anyway=True,
-                )
-            self.assertEqual(forced["formatter_status"], "PLANNED")
-            self.assertTrue(forced["format_anyway"])
-            self.assertEqual(len(forced["parts"]), 3)
+            self.assertEqual(plan["formatter_status"], "PLANNED")
+            self.assertEqual(len(plan["parts"]), 3)
+            self.assertNotIn("auto_format_" + "max_duration", plan)
+            self.assertNotIn("review_reason", plan)
 
 
 if __name__ == "__main__":

@@ -7,6 +7,8 @@ use std::path::{Path, PathBuf};
 use std::process::{Child, Command, Stdio};
 use std::sync::Mutex;
 use std::time::Duration;
+#[cfg(windows)]
+use std::os::windows::process::CommandExt;
 use tauri::{Manager, State};
 
 struct AppState {
@@ -102,6 +104,8 @@ fn configure_command(command: &mut Command, root: &Path, resources: &Path, data:
         .env("SILENCE_CUTTER_RESOURCE_DIR", resources)
         .env("SILENCE_CUTTER_DATA_DIR", data)
         .env("PATH", format!("{};{}", bin.display(), old_path));
+    #[cfg(windows)]
+    command.creation_flags(0x08000000);
 }
 
 fn hidden_command(program: &Path) -> Command {

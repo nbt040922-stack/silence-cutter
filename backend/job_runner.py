@@ -95,9 +95,10 @@ def _atomic_json(path: Path, value: Any) -> None:
 
 def default_settings() -> dict[str, Any]:
     data_root = Path(os.environ.get("SILENCE_CUTTER_DATA_DIR", ROOT)).expanduser().resolve()
+    input_root = Path(os.environ.get("SILENCE_INPUT_DIR", "D:/Vlog/Input")).expanduser().resolve()
     return {
         "workspace_folder": str((data_root / "workspace").resolve()),
-        "input_folder": str(Path("D:/Vlog/Input").resolve()),
+        "input_folder": str(input_root),
         "output_folder": str(Path("D:/Vlog/Output").resolve()),
         "input_mode": "LOCAL_FOLDER",
         "watch_input_folder": False,
@@ -126,6 +127,9 @@ def load_settings() -> dict[str, Any]:
             pass
     settings["max_concurrent_jobs"] = 1
     settings["input_mode"] = "LOCAL_FOLDER"
+    configured_input = os.environ.get("SILENCE_INPUT_DIR")
+    if configured_input:
+        settings["input_folder"] = str(Path(configured_input).expanduser().resolve())
     settings["youtube_profile_path"] = str(
         (SETTINGS_PATH.parent / "youtube_profile").resolve()
     )
@@ -135,7 +139,11 @@ def load_settings() -> dict[str, Any]:
 
 def save_settings(payload: dict[str, Any]) -> dict[str, Any]:
     settings = load_settings()
+    configured_input = os.environ.get("SILENCE_INPUT_DIR")
     for key in ("workspace_folder", "input_folder", "output_folder"):
+        if key == "input_folder" and configured_input:
+            settings[key] = str(Path(configured_input).expanduser().resolve())
+            continue
         value = str(payload.get(key, "")).strip()
         if value:
             settings[key] = str(Path(value).expanduser().resolve())
@@ -353,6 +361,110 @@ def _finalize_job(job: dict[str, Any], stage: str) -> dict[str, Any]:
     return job
 
 
+def _verified_formatter_outputs(job: dict[str, Any]) -> bool:
+    """Return true only when every planned formatter output is present and non-empty."""
+    outputs = job.get("formatted_outputs") or []
+    plan_path = Path(str(job.get("format_plan") or ""))
+    if not outputs and plan_path.is_file():
+        try:
+            outputs = json.loads(plan_path.read_text(encoding="utf-8")).get("formatted_outputs") or []
+        except (OSError, TypeError, ValueError):
+            return False
+    if not outputs:
+        return False
+    expected = job.get("formatter_part_count")
+    if expected is None and plan_path.is_file():
+        try:
+            expected = json.loads(plan_path.read_text(encoding="utf-8")).get("part_count")
+        except (OSError, TypeError, ValueError):
+            expected = None
+    if expected is not None and len(outputs) != int(expected):
+        return False
+    base = plan_path.parent if plan_path.is_file() else Path.cwd()
+    for item in outputs:
+        value = item.get("path") if isinstance(item, dict) else item
+        if not value:
+            return False
+        path = Path(str(value))
+        if not path.is_absolute():
+            path = base / path
+        try:
+            if not path.resolve().is_file() or path.stat().st_size <= 0:
+                return False
+        except OSError:
+            return False
+    return True
+
+
+def _persist_cleanup_result(
+    job: dict[str, Any], settings: dict[str, Any], status: str, error: str | None = None,
+) -> dict[str, Any]:
+    job.update(
+        source_cleanup_status=status,
+        source_cleanup_at=_now(),
+        source_cleanup_error=error,
+    )
+    _write_job(job, settings)
+    _log(
+        _job_path(job["id"], settings).parent,
+        f"Source cleanup: {status}" + (f" — {error}" if error else ""),
+    )
+    report_path = Path(str(job.get("report_path") or ""))
+    if report_path.is_file():
+        try:
+            report = json.loads(report_path.read_text(encoding="utf-8"))
+            report.update({
+                "source_cleanup_status": status,
+                "source_cleanup_at": job["source_cleanup_at"],
+                "source_cleanup_error": error,
+            })
+            _atomic_json(report_path, report)
+        except (OSError, TypeError, ValueError):
+            pass
+    return job
+
+
+def _cleanup_source_after_success(
+    job: dict[str, Any], settings: dict[str, Any] | None = None,
+) -> dict[str, Any]:
+    """Delete only a verified local-input source after a successful terminal job."""
+    settings = settings or load_settings()
+    if job.get("source_cleanup_status"):
+        return job
+    if job.get("status") != "DONE" or job.get("formatter_status") != "DONE":
+        return _persist_cleanup_result(job, settings, "SKIPPED_JOB_NOT_DONE")
+    if not _verified_formatter_outputs(job):
+        return _persist_cleanup_result(job, settings, "SKIPPED_JOB_NOT_DONE")
+    source_value = job.get("source_path")
+    if not source_value:
+        return _persist_cleanup_result(job, settings, "SKIPPED_NOT_IN_INPUT")
+    try:
+        source = Path(str(source_value)).expanduser().resolve()
+        input_root = Path(settings["input_folder"]).expanduser().resolve()
+        source_text = os.path.normcase(os.path.normpath(str(source)))
+        root_text = os.path.normcase(os.path.normpath(str(input_root)))
+        if os.path.commonpath([source_text, root_text]) != root_text:
+            return _persist_cleanup_result(job, settings, "SKIPPED_NOT_IN_INPUT")
+    except (OSError, ValueError):
+        return _persist_cleanup_result(job, settings, "SKIPPED_NOT_IN_INPUT")
+    for other in _read_jobs_raw(settings):
+        if other.get("id") == job.get("id") or other.get("status") in TERMINAL:
+            continue
+        other_source = other.get("source_path")
+        if not other_source:
+            continue
+        try:
+            if Path(str(other_source)).expanduser().resolve() == source:
+                return _persist_cleanup_result(job, settings, "SKIPPED_IN_USE")
+        except OSError:
+            continue
+    try:
+        source.unlink()
+    except OSError as exc:
+        return _persist_cleanup_result(job, settings, "FAILED", str(exc))
+    return _persist_cleanup_result(job, settings, "DELETED")
+
+
 def _valid_url(value: str) -> bool:
     parsed = urlparse(value)
     return parsed.scheme in {"http", "https"} and bool(parsed.netloc)
@@ -480,7 +592,12 @@ def scan_local_folder(
     created_count = 0
     updated_observations: dict[str, Any] = {}
     for source in sorted(folder.iterdir(), key=lambda item: item.name.casefold()):
-        if not source.is_file() or source.suffix.lower() not in SUPPORTED_LOCAL_VIDEO_EXTENSIONS:
+        if (
+            not source.is_file()
+            or source.name.startswith(".")
+            or source.name.lower().endswith((".part", ".ytdl", ".tmp"))
+            or source.suffix.lower() not in SUPPORTED_LOCAL_VIDEO_EXTENSIONS
+        ):
             continue
         try:
             stat = source.stat()
@@ -711,6 +828,7 @@ def retry_job(job_id: str) -> dict[str, Any]:
         total_job_time=None, estimated_total_time_at_start=None,
         final_estimation_error=None, overall_progress=0.0,
         download_started_at=None, analysis_started_at=None,
+        source_cleanup_status=None, source_cleanup_at=None, source_cleanup_error=None,
     )
     _write_job(job)
     return job
@@ -1389,9 +1507,7 @@ def _process_ready_job(
             title_rewrite_model_loads=rewrite["model_load_count"],
         )
         _atomic_json(report, report_data)
-        clean_master_required = bool(rendered) or bool(job.get("keep_clean_master")) or (
-            clean_duration is not None and float(clean_duration) > 1200.0
-        )
+        clean_master_required = bool(rendered) or bool(job.get("keep_clean_master"))
         destination: Path | None = None
         if clean_master_required:
             if rendered is None:
@@ -1438,6 +1554,8 @@ def _process_ready_job(
         _log(job_dir, f"Analysis done; clean master {'rendered' if destination else 'skipped'}")
         _log(job_dir, "TikTok formatter planning started")
         _format_done_job(_job_path(job["id"], settings))
+        job = _read_job(_job_path(job["id"], settings))
+        _cleanup_source_after_success(job, settings)
         job = _read_job(_job_path(job["id"], settings))
     except Exception as exc:
         current = _read_job(_job_path(job["id"], settings))

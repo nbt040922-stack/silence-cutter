@@ -28,7 +28,6 @@ PART_BANNER = {
 }
 TITLE_VIDEO_GAP = 52
 VIDEO_PART_GAP = 52
-AUTO_FORMAT_MAX_DURATION = 1200.0
 DURATION_POLICY = {
     "preferred_min": 180.0, "preferred_max": 360.0,
     "soft_overrun_max": 420.0,
@@ -286,8 +285,6 @@ def _outside_soft_range(duration: float) -> float:
 def formatter_status(clean_duration: float, format_anyway: bool = False) -> str:
     if clean_duration <= 0:
         raise ValueError("clean video duration must be positive")
-    if clean_duration > AUTO_FORMAT_MAX_DURATION and not format_anyway:
-        return "NEEDS_REVIEW"
     return "PLANNED"
 
 
@@ -530,39 +527,6 @@ def plan_done_job(
     title = fit_title(str(job["title"]), TITLE_BANNER)
     part_label_template = PART_LABELS[title["language"]]
     target = Path(output_path).expanduser().resolve()
-    if status == "NEEDS_REVIEW":
-        Path(preview_path).expanduser().resolve().unlink(missing_ok=True)
-        plan = {
-            "schema_version": 2,
-            "formatter_status": status,
-            "part_count": part_count,
-            "auto_format_eligible": False,
-            "format_anyway": False,
-            "source_job_id": job.get("id"),
-            "source_job_path": str(job_file),
-            "clean_video_path": str(clean_video) if clean_video.is_file() else None,
-            "source_video_path": str(source_video) if source_video.is_file() else None,
-            "direct_source_render": not clean_video.is_file(),
-            "render_segments": render_segments,
-            "clean_video_duration": clean_duration,
-            "auto_format_max_duration": AUTO_FORMAT_MAX_DURATION,
-            "duration_policy": DURATION_POLICY,
-            "parts": [],
-            "boundary_candidates": [],
-            "title": title,
-            "original_title": str(job["title"]),
-            "rewritten_title": rewrite["rewritten_title"],
-            "filename_base": rewrite["filename_base"],
-            "title_rewrite_status": rewrite["status"],
-            "title_rewrite_seconds": rewrite.get("total_seconds", 0.0),
-            "part_label_template": part_label_template,
-            "preview_path": None,
-            "review_reason": "clean video exceeds the 20-minute automatic formatter limit",
-        }
-        target.write_text(
-            json.dumps(plan, ensure_ascii=False, indent=2) + "\n", encoding="utf-8"
-        )
-        return plan
     speech_intervals = debug.get("union_intervals") or []
     parts, candidates = plan_parts(
         clean_duration, render_segments, speech_intervals, part_count
@@ -580,9 +544,7 @@ def plan_done_job(
         "schema_version": 2,
         "formatter_status": status,
         "part_count": part_count,
-        "auto_format_eligible": clean_duration <= AUTO_FORMAT_MAX_DURATION,
         "format_anyway": bool(format_anyway),
-        "auto_format_max_duration": AUTO_FORMAT_MAX_DURATION,
         "duration_policy": DURATION_POLICY,
         "source_job_id": job.get("id"),
         "source_job_path": str(job_file),

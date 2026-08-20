@@ -1,4 +1,5 @@
 import json
+import os
 import tempfile
 import unittest
 from concurrent.futures import Future
@@ -108,6 +109,41 @@ class JobRunnerTests(unittest.TestCase):
         })
         self.assertTrue(all(item["status"] == "READY" for item in ready["files"]))
 
+    def test_silence_input_dir_environment_is_canonical(self):
+        configured = self.root / "shared-inbox"
+        with patch.dict(os.environ, {"SILENCE_INPUT_DIR": str(configured)}):
+            settings = job_runner.load_settings()
+            saved = job_runner.save_settings({"input_folder": str(self.root / "ignored")})
+        self.assertEqual(Path(settings["input_folder"]), configured.resolve())
+        self.assertEqual(Path(saved["input_folder"]), configured.resolve())
+
+    def test_local_scan_ignores_hidden_and_download_temporary_files(self):
+        folder = Path(job_runner.load_settings()["input_folder"])
+        folder.mkdir(parents=True, exist_ok=True)
+        (folder / ".hidden.mp4").write_bytes(b"hidden")
+        (folder / "video.mp4.part").write_bytes(b"partial")
+        (folder / "video.mp4.tmp").write_bytes(b"partial")
+        (folder / "video.mp4.ytdl").write_bytes(b"partial")
+        (folder / "final.mp4").write_bytes(b"stable")
+
+        result = job_runner.scan_local_folder(now=0, probe=lambda _path: 10.0)
+
+        self.assertEqual([item["filename"] for item in result["files"]], ["final.mp4"])
+
+    def test_multiple_finalized_inbox_files_enqueue_independent_jobs(self):
+        folder = Path(job_runner.load_settings()["input_folder"])
+        folder.mkdir(parents=True, exist_ok=True)
+        (folder / "video-a.mp4").write_bytes(b"a")
+        (folder / "video-b.mp4").write_bytes(b"b")
+        job_runner.scan_local_folder(now=0, probe=lambda _path: 10.0)
+
+        result = job_runner.scan_local_folder(
+            enqueue=True, now=8, probe=lambda _path: 10.0,
+        )
+
+        self.assertEqual(result["enqueued"], 2)
+        self.assertEqual(len(job_runner.list_jobs()), 2)
+
     def test_growing_file_stays_unready_until_size_and_mtime_are_stable(self):
         folder = Path(job_runner.load_settings()["input_folder"])
         folder.mkdir(parents=True, exist_ok=True)
@@ -183,6 +219,126 @@ class JobRunnerTests(unittest.TestCase):
         self.assertEqual(source.read_bytes(), original)
         self.assertTrue(source.is_file())
         self.assertEqual(result["download_time"], 0.0)
+
+    def _cleanup_fixture(self, *, source_in_input=True, output_size=4, status="DONE"):
+        settings = job_runner.load_settings()
+        source_root = Path(settings["input_folder"]) if source_in_input else self.root / "outside"
+        source_root.mkdir(parents=True, exist_ok=True)
+        source = source_root / "cleanup.mp4"
+        source.write_bytes(b"source")
+        output = self.root / "output" / "PART_1.mp4"
+        output.parent.mkdir(parents=True, exist_ok=True)
+        output.write_bytes(b"x" * output_size)
+        job = job_runner.create_jobs(["https://example.com/cleanup"])[0]
+        job.update(
+            status=status, formatter_status="DONE", source_path=str(source),
+            formatted_outputs=[{"path": str(output)}],
+        )
+        job_runner._write_job(job)
+        return job, source, output
+
+    def test_successful_verified_done_job_deletes_input_and_persists(self):
+        job, source, _ = self._cleanup_fixture()
+
+        result = job_runner._cleanup_source_after_success(job)
+
+        self.assertFalse(source.exists())
+        self.assertEqual(result["source_cleanup_status"], "DELETED")
+        self.assertIsNotNone(result["source_cleanup_at"])
+        persisted = job_runner._read_job(job_runner._job_path(job["id"]))
+        self.assertEqual(persisted["source_cleanup_status"], "DELETED")
+
+    def test_failed_job_preserves_input(self):
+        job, source, _ = self._cleanup_fixture(status="FAILED")
+
+        result = job_runner._cleanup_source_after_success(job)
+
+        self.assertTrue(source.exists())
+        self.assertEqual(result["source_cleanup_status"], "SKIPPED_JOB_NOT_DONE")
+
+    def test_missing_or_zero_output_preserves_input(self):
+        job, source, output = self._cleanup_fixture(output_size=0)
+
+        result = job_runner._cleanup_source_after_success(job)
+
+        self.assertTrue(source.exists())
+        self.assertEqual(result["source_cleanup_status"], "SKIPPED_JOB_NOT_DONE")
+        output.unlink()
+
+    def test_source_outside_input_folder_is_protected(self):
+        job, source, _ = self._cleanup_fixture(source_in_input=False)
+
+        result = job_runner._cleanup_source_after_success(job)
+
+        self.assertTrue(source.exists())
+        self.assertEqual(result["source_cleanup_status"], "SKIPPED_NOT_IN_INPUT")
+
+    def test_active_job_using_same_source_is_protected(self):
+        job, source, _ = self._cleanup_fixture()
+        other = job_runner.create_jobs(["https://example.com/other"])[0]
+        other.update(status="ANALYZING", source_path=str(source))
+        job_runner._write_job(other)
+
+        result = job_runner._cleanup_source_after_success(job)
+
+        self.assertTrue(source.exists())
+        self.assertEqual(result["source_cleanup_status"], "SKIPPED_IN_USE")
+
+    def test_cleanup_is_idempotent(self):
+        job, source, _ = self._cleanup_fixture()
+
+        first = job_runner._cleanup_source_after_success(job)
+        second = job_runner._cleanup_source_after_success(first)
+
+        self.assertEqual(first["source_cleanup_status"], "DELETED")
+        self.assertEqual(second["source_cleanup_status"], "DELETED")
+        self.assertFalse(source.exists())
+
+    def test_cleanup_failure_preserves_done_job_and_records_error(self):
+        job, source, _ = self._cleanup_fixture()
+
+        with patch.object(Path, "unlink", side_effect=PermissionError("locked")):
+            result = job_runner._cleanup_source_after_success(job)
+
+        self.assertEqual(result["status"], "DONE")
+        self.assertEqual(result["source_cleanup_status"], "FAILED")
+        self.assertIn("locked", result["source_cleanup_error"])
+        self.assertTrue(source.exists())
+
+    @patch.object(job_runner, "_run_semantic_stage", return_value={"status": "SKIPPED"})
+    @patch.object(job_runner, "_run_long_video_stage", return_value={"status": "SKIPPED"})
+    def test_processing_hook_cleans_local_source_after_formatter_success(
+        self, _long_stage, _semantic_stage,
+    ):
+        settings = job_runner.load_settings()
+        source = Path(settings["input_folder"]) / "hook.mp4"
+        source.parent.mkdir(parents=True, exist_ok=True)
+        source.write_bytes(b"source")
+        job = job_runner._create_local_job(source, "hook-fingerprint", 500.0, settings)
+        part = self.root / "output" / "PART_1.mp4"
+        part.parent.mkdir(parents=True, exist_ok=True)
+        part.write_bytes(b"part")
+
+        def pipeline(_job, directory, _source):
+            report = directory / "pipeline_report.json"
+            report.write_text(json.dumps({"expected_output_duration": 500}), encoding="utf-8")
+            return None, report
+
+        def formatter(job_file, **_options):
+            stored = job_runner._read_job(job_file)
+            stored.update(
+                formatter_status="DONE", formatter_part_count=1,
+                formatted_outputs=[{"path": str(part)}], format_plan=str(self.root / "format_plan.json"),
+            )
+            job_runner._write_job(stored)
+            return {"formatter_status": "DONE"}
+
+        with patch.object(job_runner, "_format_done_job", side_effect=formatter):
+            result = job_runner._process_ready_job(job, pipeline=pipeline)
+
+        self.assertEqual(result["status"], "DONE")
+        self.assertEqual(result["source_cleanup_status"], "DELETED")
+        self.assertFalse(source.exists())
 
     def test_local_ready_job_never_invokes_downloader(self):
         settings = job_runner.load_settings()
@@ -366,7 +522,7 @@ class JobRunnerTests(unittest.TestCase):
 
     @patch.object(job_runner, "_format_done_job")
     @patch.object(job_runner, "_render_clean_master_from_report")
-    def test_needs_review_job_renders_clean_master_without_detector_rerun(
+    def test_long_job_does_not_render_review_only_clean_master(
         self, render_clean, formatter,
     ):
         job = job_runner.create_jobs(["https://example.com/long"])[0]
@@ -381,19 +537,13 @@ class JobRunnerTests(unittest.TestCase):
             report.write_text(json.dumps({"expected_output_duration": 1200.1}), encoding="utf-8")
             return None, report
 
-        def render(_source, rendered, _report):
-            rendered.write_bytes(b"clean")
-            return rendered
-
-        render_clean.side_effect = render
-        formatter.return_value = {"formatter_status": "NEEDS_REVIEW"}
+        formatter.return_value = {"formatter_status": "PLANNED"}
         result = job_runner._process_ready_job(job, pipeline=pipeline)
 
-        render_clean.assert_called_once()
-        self.assertTrue(result["clean_master_required"])
-        self.assertTrue(result["clean_master_rendered"])
-        self.assertEqual(Path(result["output_path"]).name, "clean_master.mp4")
-        self.assertTrue(Path(result["output_path"]).is_file())
+        render_clean.assert_not_called()
+        self.assertFalse(result["clean_master_required"])
+        self.assertFalse(result["clean_master_rendered"])
+        self.assertIsNone(result["output_path"])
         self.assertTrue(source.is_file())
 
     @patch.object(job_runner, "_format_done_job")
