@@ -4,6 +4,9 @@ import json
 import hashlib
 import os
 import re
+import shutil
+import subprocess
+import sys
 import threading
 import traceback
 import urllib.error
@@ -20,6 +23,8 @@ from urllib.parse import unquote, urlsplit
 ROOT = Path(__file__).resolve().parent
 LOOPBACK = "127.0.0.1"
 ACTIVE_STATES = {"QUEUED", "PROCESSING", "FINALIZING"}
+QWEN_ENDPOINT = os.getenv("SILENCE_QWEN_ENDPOINT", os.getenv("QWEN_ENDPOINT", "http://127.0.0.1:8792")).rstrip("/")
+BRIDGE_BUILD = os.getenv("SILENCE_BRIDGE_BUILD", "dev")
 
 
 class RequestError(ValueError):
@@ -41,7 +46,7 @@ def utc_now() -> str:
 
 def qwen_ready() -> bool:
     try:
-        with urllib.request.urlopen("http://127.0.0.1:8792/health", timeout=2) as response:
+        with urllib.request.urlopen(f"{QWEN_ENDPOINT}/health", timeout=2) as response:
             health = json.loads(response.read().decode("utf-8"))
         return bool(
             health.get("status") == "READY"
@@ -50,6 +55,55 @@ def qwen_ready() -> bool:
         )
     except (OSError, urllib.error.URLError, ValueError):
         return False
+
+
+def _git_build() -> str:
+    if BRIDGE_BUILD != "dev":
+        return BRIDGE_BUILD
+    try:
+        return subprocess.check_output(
+            ["git", "-C", str(ROOT), "rev-parse", "--short", "HEAD"],
+            text=True, stderr=subprocess.DEVNULL, timeout=2,
+        ).strip() or "dev"
+    except (OSError, subprocess.SubprocessError):
+        return "dev"
+
+
+def runtime_health(*, host: str, port: int, qwen_probe: Callable[[], bool] = qwen_ready) -> dict[str, Any]:
+    formatter_import = "OK"
+    formatter_error = None
+    try:
+        from PIL import ImageFont  # noqa: F401
+        from formatter import planner  # noqa: F401
+    except Exception as exc:
+        formatter_import = "ERROR"
+        formatter_error = f"{type(exc).__name__}: {exc}"[-300:]
+    ffmpeg = shutil.which("ffmpeg")
+    ffprobe = shutil.which("ffprobe")
+    qwen_ok = bool(qwen_probe())
+    expected_python = os.getenv("SILENCE_PYTHON")
+    runtime_ok = not expected_python or Path(sys.executable).resolve() == Path(expected_python).resolve()
+    base_ready = bool(runtime_ok and formatter_import == "OK" and ffmpeg and ffprobe and ROOT.is_dir())
+    return {
+        "status": "READY" if base_ready else ("WRONG_RUNTIME" if not runtime_ok else "NOT_READY"),
+        "readiness": "READY" if base_ready else ("WRONG_RUNTIME" if not runtime_ok else "NOT_READY"),
+        "project_root": str(ROOT),
+        "python_executable": str(Path(sys.executable).resolve()),
+        "python_version": sys.version.split()[0],
+        "virtual_env": str(Path(sys.prefix).resolve()),
+        "bridge_host": host, "bridge_port": port,
+        "bridge_pid": os.getpid(),
+        "bridge_build": _git_build(),
+        "qwen_endpoint": QWEN_ENDPOINT,
+        "qwen_status": "READY" if qwen_ok else "ERROR",
+        "qwen_health": qwen_ok,
+        "enhanced_ready": bool(base_ready and qwen_ok),
+        "formatter_import": formatter_import,
+        "formatter_import_health": formatter_import,
+        "formatter_error": formatter_error,
+        "ffmpeg": str(ffmpeg or "MISSING"), "ffprobe": str(ffprobe or "MISSING"),
+        "runtime_expected": str(Path(expected_python).resolve()) if expected_python else None,
+    }
 
 
 def _production_part_core(
@@ -156,6 +210,7 @@ class ContentOpsProcessBridge:
         self._executor = ThreadPoolExecutor(max_workers=max(1, max_concurrency), thread_name_prefix="contentops-process")
         self._server: ThreadingHTTPServer | None = None
         self._server_thread: threading.Thread | None = None
+        self._health = runtime_health(host=host, port=port, qwen_probe=qwen_health)
         self._load()
 
     def _load(self) -> None:
@@ -182,6 +237,8 @@ class ContentOpsProcessBridge:
         if not isinstance(enhanced, bool):
             raise RequestError("INVALID_REQUEST")
         request["enhanced_content_selection"] = enhanced
+        if self._health["status"] != "READY":
+            raise RequestError("BRIDGE_NOT_READY")
         if enhanced and not self.qwen_health():
             raise RequestError("QWEN_WORKER_UNAVAILABLE")
         if not re.fullmatch(r"[A-Za-z0-9._-]{1,128}", request["handoff_id"]):
@@ -327,6 +384,8 @@ class ContentOpsProcessBridge:
     def start(self) -> tuple[str, int]:
         if self._server:
             return self._server.server_address
+        self._health = runtime_health(host=self.host, port=self.port, qwen_probe=self.qwen_health)
+        print(json.dumps(self._health, ensure_ascii=False), flush=True)
         self.restore()
         bridge = self
 
@@ -345,7 +404,11 @@ class ContentOpsProcessBridge:
             def do_GET(self) -> None:
                 path = urlsplit(self.path).path
                 if path == "/health":
-                    return self.send_json(200, {"status": "ok"})
+                    bridge._health = runtime_health(
+                        host=bridge.host, port=bridge.port, qwen_probe=bridge.qwen_health,
+                    )
+                    status = 200 if bridge._health["status"] == "READY" else 503
+                    return self.send_json(status, bridge._health)
                 prefix = "/api/process-jobs/"
                 if path.startswith(prefix):
                     record = bridge.get(unquote(path[len(prefix):]))
@@ -362,7 +425,7 @@ class ContentOpsProcessBridge:
                     created, record = bridge.submit(json.loads(self.rfile.read(size)))
                     self.send_json(201 if created else 200, record)
                 except RequestError as exc:
-                    status = 503 if exc.code == "QWEN_WORKER_UNAVAILABLE" else 422 if exc.code in {"SOURCE_FILE_MISSING", "NAS_UNAVAILABLE"} else 400
+                    status = 503 if exc.code in {"QWEN_WORKER_UNAVAILABLE", "BRIDGE_NOT_READY"} else 422 if exc.code in {"SOURCE_FILE_MISSING", "NAS_UNAVAILABLE"} else 400
                     self.send_json(status, {"error": exc.code})
                 except (ValueError, TypeError, json.JSONDecodeError):
                     self.send_json(400, {"error": "INVALID_REQUEST"})

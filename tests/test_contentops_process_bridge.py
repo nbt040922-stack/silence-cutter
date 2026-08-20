@@ -11,7 +11,7 @@ from unittest.mock import patch
 import pytest
 
 from contentops_process_bridge import (
-    ContentOpsProcessBridge, RequestError, _production_part_core,
+    ContentOpsProcessBridge, RequestError, _production_part_core, runtime_health,
 )
 
 
@@ -114,6 +114,38 @@ def test_enhanced_flag_is_explicit_and_omitted_keeps_old_core_contract(tmp_path,
 def test_bridge_rejects_non_loopback_bind(tmp_path):
     with pytest.raises(ValueError, match="must bind to 127.0.0.1"):
         ContentOpsProcessBridge(records_path=tmp_path / "records.json", host="0.0.0.0")
+
+
+def test_runtime_health_exposes_identity_and_explicit_qwen_state(monkeypatch):
+    monkeypatch.delenv("SILENCE_PYTHON", raising=False)
+    monkeypatch.setattr("contentops_process_bridge.shutil.which", lambda name: f"C:/bin/{name}.exe")
+    health = runtime_health(host="127.0.0.1", port=8791, qwen_probe=lambda: False)
+    assert health["status"] == "READY"
+    assert health["formatter_import_health"] == "OK"
+    assert health["qwen_status"] == "ERROR"
+    assert health["enhanced_ready"] is False
+    assert health["bridge_port"] == 8791
+
+
+def test_runtime_health_detects_wrong_runtime(monkeypatch, tmp_path):
+    monkeypatch.setenv("SILENCE_PYTHON", str(tmp_path / "other-python.exe"))
+    monkeypatch.setattr("contentops_process_bridge.shutil.which", lambda name: f"C:/bin/{name}.exe")
+    health = runtime_health(host="127.0.0.1", port=8791, qwen_probe=lambda: True)
+    assert health["status"] == "WRONG_RUNTIME"
+
+
+def test_runtime_health_reports_missing_pil(monkeypatch):
+    import builtins
+    original_import = builtins.__import__
+    def missing_pil(name, *args, **kwargs):
+        if name == "PIL" or name.startswith("PIL."):
+            raise ImportError("PIL missing")
+        return original_import(name, *args, **kwargs)
+    monkeypatch.setattr(builtins, "__import__", missing_pil)
+    monkeypatch.setattr("contentops_process_bridge.shutil.which", lambda name: f"C:/bin/{name}.exe")
+    health = runtime_health(host="127.0.0.1", port=8791, qwen_probe=lambda: True)
+    assert health["status"] == "NOT_READY"
+    assert health["formatter_import_health"] == "ERROR"
 
 
 def test_production_core_reuses_existing_planner_and_renderer(tmp_path, media):
@@ -249,7 +281,11 @@ def test_localhost_http_contract(tmp_path, media):
     bridge = ContentOpsProcessBridge(records_path=tmp_path / "records.json", port=0, core=core)
     host, port = bridge.start()
     assert host == "127.0.0.1"
-    assert http_json("GET", f"http://{host}:{port}/health") == (200, {"status": "ok"})
+    status, health = http_json("GET", f"http://{host}:{port}/health")
+    assert status == 200
+    assert health["status"] == "READY"
+    assert health["project_root"] == str(Path(__file__).resolve().parents[1])
+    assert health["formatter_import_health"] == "OK"
     status, created = http_json("POST", f"http://{host}:{port}/api/process-jobs", request(source, output))
     assert status == 201
     wait_done(bridge, created["external_id"])
