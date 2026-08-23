@@ -1,0 +1,17 @@
+{
+  "schema_version": 1,
+  "original_title": "Why Are So Many Americans Retiring Overseas?",
+  "rewritten_title": "Americans Are Surprisingly Choosing to Retire Abroad",
+  "safe_rewritten_title": "Americans Are Surprisingly Choosing to Retire Abroad",
+  "filename_base": "Americans Are Surprisingly Choosing to Retire Abroad",
+  "status": "APPLIED",
+  "model": "Qwen/Qwen2.5-VL-7B-Instruct-AWQ",
+  "generation_count": 1,
+  "retry_count": 0,
+  "guard_rejections": [],
+  "model_load_count": 0,
+  "queue_wait_seconds": 1.2999953469261527e-06,
+  "generation_seconds": 13.719564099999843,
+  "total_seconds": 13.722478200004844,
+  "error": null
+}

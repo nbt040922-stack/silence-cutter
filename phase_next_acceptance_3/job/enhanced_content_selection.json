@@ -1,0 +1,45 @@
+{
+  "status": "ENHANCED_ERROR",
+  "part_count": 0,
+  "source_duration": 1448.154,
+  "ranked_candidates": [
+    {
+      "center": 300.0,
+      "score": 0.9,
+      "topic": "Shopping",
+      "reason": "Shopping"
+    },
+    {
+      "center": 480.0,
+      "score": 0.8,
+      "topic": "Review",
+      "reason": "Review"
+    },
+    {
+      "center": 720.0,
+      "score": 0.7,
+      "topic": "Comparison",
+      "reason": "Comparison"
+    },
+    {
+      "center": 960.0,
+      "score": 0.6,
+      "topic": "Price",
+      "reason": "Price"
+    },
+    {
+      "center": 1140.0,
+      "score": 0.5,
+      "topic": "Conclusion",
+      "reason": "Conclusion"
+    },
+    {
+      "center": 1380.0,
+      "score": 0.4,
+      "topic": "Final",
+      "reason": "Final"
+    }
+  ],
+  "reason": "ModuleNotFoundError: No module named 'funasr'",
+  "total_processing_time": 103.55006290000028
+}

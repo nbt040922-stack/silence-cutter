@@ -1,0 +1,19 @@
+{
+  "schema_version": 1,
+  "original_title": "I Quit Social Media for 30 Days - Here's What Changed",
+  "rewritten_title": "My Journey of Quitting Social Media for 30 Days",
+  "safe_rewritten_title": "My Journey of Quitting Social Media for 30 Days",
+  "filename_base": "My Journey of Quitting Social Media for 30 Days",
+  "status": "APPLIED",
+  "model": "Qwen/Qwen2.5-VL-7B-Instruct-AWQ",
+  "generation_count": 2,
+  "retry_count": 1,
+  "guard_rejections": [
+    "markdown output"
+  ],
+  "model_load_count": 0,
+  "queue_wait_seconds": 1.8999999156221747e-06,
+  "generation_seconds": 33.150228999998944,
+  "total_seconds": 33.154128199996194,
+  "error": null
+}

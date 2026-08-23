@@ -12,6 +12,7 @@ from typing import Any
 
 from PIL import Image, ImageChops, ImageDraw, ImageFont, ImageStat
 
+from installer_setup.downloads import ensure_qwen_model
 from silence_cutter.runtime_paths import bundled_path, find_executable
 
 
@@ -261,6 +262,18 @@ class QwenSemanticDetector:
         self.model_reference = model_reference or os.environ.get("SEMANTIC_QWEN_MODEL") or (
             str(bundled) if bundled else ""
         )
+        if not self.model_reference or not Path(self.model_reference).expanduser().exists():
+            resource_root = os.environ.get("SILENCE_CUTTER_RESOURCE_DIR")
+            data_root = os.environ.get("SILENCE_CUTTER_DATA_DIR")
+            manifest = Path(resource_root) / "model_manifest.json" if resource_root else None
+            model_root = Path(data_root) / "models" if data_root else None
+            if manifest and model_root and manifest.is_file():
+                try:
+                    record = ensure_qwen_model(manifest, model_root)
+                except Exception as exc:
+                    raise RuntimeError(f"Qwen model download failed: {exc}") from exc
+                if record.status == "verified" and record.path:
+                    self.model_reference = str(record.path)
         if not self.model_reference or not Path(self.model_reference).expanduser().exists():
             raise RuntimeError("local Qwen model is not configured")
         loaded = time.perf_counter()

@@ -60,3 +60,11 @@ npm run build
 cd src-tauri
 cargo check
 ```
+# ContentOps local routing
+
+- `:8780`: Manual LAN API only (`origin=MANUAL_LAN`)
+- `127.0.0.1:8790`: YTDOWNLOAD
+- `127.0.0.1:8791`: shared Silence Scheduler, FIFO, one processing slot
+- `127.0.0.1:8792`: Qwen Worker, owned by the scheduler
+
+Manual jobs are downloaded through `:8790` and then submitted to `:8791`; the LAN API never calls Qwen directly.

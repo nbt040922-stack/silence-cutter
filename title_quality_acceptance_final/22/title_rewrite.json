@@ -1,0 +1,19 @@
+{
+  "schema_version": 1,
+  "original_title": "Don't Move Abroad Until You Know These 5 Things",
+  "rewritten_title": "Discover the Top 5 Things You Need to Know Before Moving Abroad",
+  "safe_rewritten_title": "Discover the Top 5 Things You Need to Know Before Moving Abroad",
+  "filename_base": "Discover the Top 5 Things You Need to Know Before Moving Abroad",
+  "status": "APPLIED",
+  "model": "Qwen/Qwen2.5-VL-7B-Instruct-AWQ",
+  "generation_count": 2,
+  "retry_count": 1,
+  "guard_rejections": [
+    "title removes all useful numbers"
+  ],
+  "model_load_count": 0,
+  "queue_wait_seconds": 1.500004145782441e-06,
+  "generation_seconds": 34.70163680000405,
+  "total_seconds": 34.705326800001785,
+  "error": null
+}

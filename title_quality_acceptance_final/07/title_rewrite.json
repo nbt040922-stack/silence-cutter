@@ -1,0 +1,19 @@
+{
+  "schema_version": 1,
+  "original_title": "50 *NEW* Dollar Tree Deals you NEED to buy! (from the pro!)",
+  "rewritten_title": "50 Dollar Tree Finds Actually Worth Buying",
+  "safe_rewritten_title": "50 Dollar Tree Finds Actually Worth Buying",
+  "filename_base": "50 Dollar Tree Finds Actually Worth Buying",
+  "status": "APPLIED",
+  "model": "Qwen/Qwen2.5-VL-7B-Instruct-AWQ",
+  "generation_count": 2,
+  "retry_count": 1,
+  "guard_rejections": [
+    "markdown output"
+  ],
+  "model_load_count": 0,
+  "queue_wait_seconds": 2.000007953029126e-06,
+  "generation_seconds": 28.89810659999057,
+  "total_seconds": 28.90152799999487,
+  "error": null
+}

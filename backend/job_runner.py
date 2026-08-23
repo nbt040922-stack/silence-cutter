@@ -765,15 +765,65 @@ def create_jobs(urls: list[str]) -> list[dict[str, Any]]:
 
 
 def list_jobs() -> list[dict[str, Any]]:
-    jobs = _read_jobs_raw()
+    settings = load_settings()
+    jobs = _read_jobs_raw(settings)
+    for job in jobs:
+        _reconcile_contentops_bridge_job(job, settings)
     history = _eta_history(jobs)
     jobs = [job | _eta_snapshot(job, history) for job in jobs]
     return sorted(
         jobs,
         key=lambda item: (
-            item.get("created_at", ""), item.get("queue_order", 0), item.get("id", "")
+            item.get("created_at") or "",
+            int(item.get("queue_order") or 0),
+            item.get("id") or "",
         ),
     )
+
+
+def _reconcile_contentops_bridge_job(
+    job: dict[str, Any], settings: dict[str, Any]
+) -> bool:
+    """Reflect a completed bridge run in its corresponding LAN job record."""
+    if job.get("origin") == "MANUAL_LAN":
+        return False
+    if job.get("status") not in ACTIVE or job.get("pid") or not job.get("source_path"):
+        return False
+    reports_root = Path(settings["workspace_folder"]) / "contentops-process-reports"
+    if not reports_root.is_dir():
+        return False
+    try:
+        source = Path(str(job["source_path"])).expanduser().resolve()
+    except (OSError, RuntimeError):
+        return False
+    for bridge_path in reports_root.glob("*/job.json"):
+        try:
+            bridge = json.loads(bridge_path.read_text(encoding="utf-8"))
+            bridge_source = Path(str(bridge.get("source_path") or "")).expanduser().resolve()
+        except (OSError, RuntimeError, TypeError, ValueError):
+            continue
+        if bridge.get("status") != "DONE" or bridge_source != source:
+            continue
+        outputs = bridge.get("formatted_outputs") or []
+        output_values = [
+            item.get("path") if isinstance(item, dict) else item for item in outputs
+        ]
+        if bridge.get("output_path"):
+            output_values.append(bridge["output_path"])
+        if not output_values or not any(Path(str(value)).is_file() for value in output_values if value):
+            continue
+        preserved = {key: job.get(key) for key in ("id", "created_at", "queue_order", "url")}
+        job.update({key: value for key, value in bridge.items() if key not in preserved})
+        job.update(
+            preserved,
+            status="DONE", stage="done", progress=100, pid=None,
+            finished_at=bridge.get("finished_at") or _now(),
+            external_process_id=bridge.get("id"),
+            error=None, cancel_requested=False,
+        )
+        _write_job(job, settings)
+        return True
+    return False
 
 
 def _terminate_tree(pid: int | None) -> None:
@@ -811,6 +861,11 @@ def cancel_job(job_id: str) -> dict[str, Any]:
 
 def retry_job(job_id: str) -> dict[str, Any]:
     job = _read_job(_job_path(job_id))
+    if job.get("formatter_status") == "FAILED" or job.get("stage") == "formatter_failed":
+        if job.get("status") != "DONE":
+            raise ValueError("formatter retry requires a completed analysis job")
+        _format_done_job(_job_path(job_id), format_anyway=False)
+        return _read_job(_job_path(job_id))
     if job["status"] not in TERMINAL:
         raise ValueError("only finished, failed, cancelled or interrupted jobs can retry")
     local_source = Path(str(job.get("source_path") or ""))
@@ -843,6 +898,19 @@ def remove_job(job_id: str) -> dict[str, bool]:
     return {"removed": True}
 
 
+def clear_history() -> dict[str, int]:
+    """Remove only terminal job folders; active and ready jobs are preserved."""
+    removed = 0
+    for job in _read_jobs_raw():
+        if job.get("status") not in TERMINAL:
+            continue
+        path = _job_path(str(job["id"]))
+        if path.parent.is_dir():
+            shutil.rmtree(path.parent)
+            removed += 1
+    return {"removed": removed}
+
+
 def recover_interrupted() -> int:
     count = 0
     for job in list_jobs():
@@ -860,6 +928,11 @@ def recover_interrupted() -> int:
 
 
 def _yt_dlp_command() -> list[str] | None:
+    # Prefer an application-bundled binary so the desktop/worker does not
+    # depend on a separately configured PATH or Python package.
+    bundled = ROOT / "tools" / ("yt-dlp.exe" if os.name == "nt" else "yt-dlp")
+    if bundled.is_file():
+        return [str(bundled)]
     executable = shutil.which("yt-dlp")
     if executable:
         return [executable]
@@ -1044,7 +1117,9 @@ def health() -> dict[str, Any]:
 
 def _log(job_dir: Path, message: str) -> None:
     stamp = datetime.now().astimezone().isoformat(timespec="seconds")
-    with (job_dir / "logs" / "job.log").open("a", encoding="utf-8") as stream:
+    log_dir = job_dir / "logs"
+    log_dir.mkdir(parents=True, exist_ok=True)
+    with (log_dir / "job.log").open("a", encoding="utf-8") as stream:
         stream.write(f"{stamp} {message}\n")
 
 
@@ -1570,6 +1645,60 @@ def _process_ready_job(
     return job
 
 
+def _pid_is_alive(pid: int | None) -> bool:
+    if not pid or pid == os.getpid():
+        return pid == os.getpid()
+    try:
+        os.kill(int(pid), 0)
+    except PermissionError:
+        # The process exists but this user cannot probe it.
+        return True
+    except (OSError, ProcessLookupError, ValueError):
+        return False
+    return True
+
+
+def reconcile_orphaned_jobs(
+    *, now: float | None = None, timeout_seconds: float | None = None,
+) -> int:
+    """Fail active jobs whose child process disappeared and stopped updating.
+
+    A short grace period avoids racing the normal hand-off between download,
+    analysis, and rendering.  This is deliberately fail-safe: it records a
+    retryable failure instead of silently leaving the UI stuck forever.
+    """
+    now = time.time() if now is None else float(now)
+    timeout = float(
+        timeout_seconds
+        if timeout_seconds is not None
+        else os.environ.get("SILENCE_ORPHAN_JOB_TIMEOUT", "30")
+    )
+    recovered = 0
+    for job in _read_jobs_raw():
+        if job.get("status") not in ACTIVE:
+            continue
+        pid = job.get("pid")
+        if pid and _pid_is_alive(int(pid)):
+            continue
+        try:
+            path = _job_path(str(job["id"]))
+            age = max(0.0, now - path.stat().st_mtime)
+        except (OSError, KeyError, ValueError, TypeError):
+            continue
+        if age < timeout:
+            continue
+        job.update(
+            status="FAILED", stage="worker_crashed", progress=None,
+            finished_at=_now(), pid=None,
+            error="Worker stopped unexpectedly; processing worker will restart automatically.",
+            cancel_requested=False,
+        )
+        _write_job(job)
+        _log(path.parent, "Worker watchdog: orphaned job marked FAILED")
+        recovered += 1
+    return recovered
+
+
 def _download_attempt(
     job_id: str,
     *, downloader: Callable[[dict[str, Any], Path], Path] = _download,
@@ -1731,11 +1860,18 @@ class DownloadManager:
     @staticmethod
     def _reap(future: Future[dict[str, Any]] | None) -> Future[dict[str, Any]] | None:
         if future is not None and future.done():
-            future.result()
+            # A worker task must never take down the supervisor.  The job
+            # watchdog below records orphaned active jobs and the outer
+            # PowerShell supervisor can restart this process if needed.
+            try:
+                future.result()
+            except Exception:
+                pass
             return None
         return future
 
     def tick(self) -> None:
+        reconcile_orphaned_jobs()
         self.download_future = self._reap(self.download_future)
         self.process_future = self._reap(self.process_future)
         settings = load_settings()
@@ -1744,7 +1880,7 @@ class DownloadManager:
             self.next_watch_scan = self.clock() + 1.0
         jobs = list_jobs()
         if self.process_future is None:
-            ready = next((job for job in jobs if job["status"] == "READY"), None)
+            ready = next((job for job in jobs if job["status"] == "READY" and job.get("origin") != "MANUAL_LAN"), None)
             if ready:
                 self.process_future = self.process_pool.submit(
                     _process_ready_job, ready, pipeline=self.pipeline
@@ -1753,7 +1889,7 @@ class DownloadManager:
             return
         retrying = next((
             job for job in jobs
-            if job["status"] == "DOWNLOADING" and job.get("stage") == "retry_wait"
+            if job["status"] == "DOWNLOADING" and job.get("stage") == "retry_wait" and job.get("origin") != "MANUAL_LAN"
         ), None)
         if retrying:
             if float(retrying.get("download_retry_at") or 0) <= self.clock():
@@ -1769,7 +1905,7 @@ class DownloadManager:
         )
         if self.clock() < cooldown_until:
             return
-        queued = next((job for job in jobs if job["status"] == "QUEUED"), None)
+        queued = next((job for job in jobs if job["status"] == "QUEUED" and job.get("origin") != "MANUAL_LAN"), None)
         if queued:
             self.download_future = self.download_pool.submit(
                 _download_attempt, queued["id"], downloader=self.downloader,
@@ -1823,7 +1959,13 @@ def process_next_job(
     *, downloader: Callable[[dict[str, Any], Path], Path] = _download,
     pipeline: Callable[[dict[str, Any], Path, Path], tuple[Path | None, Path]] = _pipeline,
 ) -> dict[str, Any] | None:
-    queued = next((job for job in list_jobs() if job["status"] == "QUEUED"), None)
+    queued = next(
+        (
+            job for job in list_jobs()
+            if job["status"] == "QUEUED" and job.get("origin") != "MANUAL_LAN"
+        ),
+        None,
+    )
     return process_job(queued, downloader=downloader, pipeline=pipeline) if queued else None
 
 

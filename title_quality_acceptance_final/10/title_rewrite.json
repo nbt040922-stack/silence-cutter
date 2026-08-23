@@ -1,0 +1,19 @@
+{
+  "schema_version": 1,
+  "original_title": "We Moved to Portugal and This Surprised Us the Most",
+  "rewritten_title": "Moving to Portugal Revealed Unexpected Things",
+  "safe_rewritten_title": "Moving to Portugal Revealed Unexpected Things",
+  "filename_base": "Moving to Portugal Revealed Unexpected Things",
+  "status": "APPLIED",
+  "model": "Qwen/Qwen2.5-VL-7B-Instruct-AWQ",
+  "generation_count": 2,
+  "retry_count": 1,
+  "guard_rejections": [
+    "markdown output"
+  ],
+  "model_load_count": 0,
+  "queue_wait_seconds": 1.500004145782441e-06,
+  "generation_seconds": 25.447864999994636,
+  "total_seconds": 25.45139399999607,
+  "error": null
+}

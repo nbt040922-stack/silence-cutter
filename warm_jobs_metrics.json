@@ -1,0 +1,44 @@
+﻿[
+    {
+        "Job":  1,
+        "Wall":  206.839,
+        "Selector":  85.851,
+        "Extract":  30.950,
+        "Qwen":  54.700,
+        "Silence":  43.664,
+        "Semantic":  11.017,
+        "Render":  65.819,
+        "QwenLoads":  0.0,
+        "Generations":  2,
+        "Concurrency":  3,
+        "Valid":  true
+    },
+    {
+        "Job":  2,
+        "Wall":  194.929,
+        "Selector":  84.805,
+        "Extract":  30.951,
+        "Qwen":  53.658,
+        "Silence":  39.348,
+        "Semantic":  10.822,
+        "Render":  59.525,
+        "QwenLoads":  0.0,
+        "Generations":  1,
+        "Concurrency":  3,
+        "Valid":  true
+    },
+    {
+        "Job":  3,
+        "Wall":  177.636,
+        "Selector":  83.990,
+        "Extract":  30.793,
+        "Qwen":  53.047,
+        "Silence":  20.473,
+        "Semantic":  10.878,
+        "Render":  61.825,
+        "QwenLoads":  0.0,
+        "Generations":  1,
+        "Concurrency":  3,
+        "Valid":  true
+    }
+]

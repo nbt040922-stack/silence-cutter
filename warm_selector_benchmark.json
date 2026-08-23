@@ -1,0 +1,8 @@
+{
+  "status": "LONG_VIDEO_SELECTOR_SKIPPED",
+  "source_duration": 1448.154,
+  "threshold": 900.0,
+  "selected_ranges": [],
+  "reason": "ValueError: fewer than 3 valid ranked candidates: '300.0s,0.85,Unboxing Costco items\\n420.0s,0.75,Woman interacting with products\\n600.0s,0.90,Price display of item\\n840.0s,0.80,Woman discussing product quality\\n1080'",
+  "total_processing_time": 82.34793119999995
+}

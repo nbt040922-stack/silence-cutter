@@ -1,0 +1,19 @@
+{
+  "schema_version": 1,
+  "original_title": "Weekly Grocery Haul With A $200/ Month Budget For A Family Of 3 | $26 Grocery Haul",
+  "rewritten_title": "How to Shop Smart for $200 Monthly on Groceries for a Family of 3",
+  "safe_rewritten_title": "How to Shop Smart for $200 Monthly on Groceries for a Family of 3",
+  "filename_base": "How to Shop Smart for $200 Monthly on Groceries for a Family of 3",
+  "status": "APPLIED",
+  "model": "Qwen/Qwen2.5-VL-7B-Instruct-AWQ",
+  "generation_count": 2,
+  "retry_count": 1,
+  "guard_rejections": [
+    "markdown output"
+  ],
+  "model_load_count": 0,
+  "queue_wait_seconds": 1.800006430130452e-06,
+  "generation_seconds": 44.29098579999118,
+  "total_seconds": 44.30954180000117,
+  "error": null
+}

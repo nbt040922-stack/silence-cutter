@@ -1,0 +1,19 @@
+{
+  "schema_version": 1,
+  "original_title": "12 Amazon Products I Use Every Single Day",
+  "rewritten_title": "12 Amazon Items I Can't Live Without",
+  "safe_rewritten_title": "12 Amazon Items I Can't Live Without",
+  "filename_base": "12 Amazon Items I Can't Live Without",
+  "status": "APPLIED",
+  "model": "Qwen/Qwen2.5-VL-7B-Instruct-AWQ",
+  "generation_count": 2,
+  "retry_count": 1,
+  "guard_rejections": [
+    "markdown output"
+  ],
+  "model_load_count": 0,
+  "queue_wait_seconds": 1.600004907231778e-06,
+  "generation_seconds": 30.588863699995272,
+  "total_seconds": 30.59211569999752,
+  "error": null
+}

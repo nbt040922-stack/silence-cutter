@@ -1,0 +1,17 @@
+{
+  "schema_version": 1,
+  "original_title": "I Lost My Job at 55 and Had to Start Over",
+  "rewritten_title": "My Life Changed After Losing My Job at 55",
+  "safe_rewritten_title": "My Life Changed After Losing My Job at 55",
+  "filename_base": "My Life Changed After Losing My Job at 55",
+  "status": "APPLIED",
+  "model": "Qwen/Qwen2.5-VL-7B-Instruct-AWQ",
+  "generation_count": 1,
+  "retry_count": 0,
+  "guard_rejections": [],
+  "model_load_count": 0,
+  "queue_wait_seconds": 1.5999976312741637e-06,
+  "generation_seconds": 17.74288759999763,
+  "total_seconds": 17.76355930000136,
+  "error": null
+}

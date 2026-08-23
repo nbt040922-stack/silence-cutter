@@ -50,6 +50,7 @@ def test_submit_is_idempotent_and_returns_exact_part_paths(tmp_path, media):
             part.write_bytes(b"processed")
         return parts
     bridge = ContentOpsProcessBridge(records_path=tmp_path / "records.json", core=core, qwen_health=lambda: True)
+    bridge._health.update(status="READY", readiness="READY")
     created, first = bridge.submit(request(source, output))
     duplicate, second = bridge.submit(request(source, output))
     result = wait_done(bridge, first["external_id"])
@@ -66,15 +67,21 @@ def test_submit_is_idempotent_and_returns_exact_part_paths(tmp_path, media):
     bridge.close()
 
 
-def test_enhanced_request_requires_ready_qwen(tmp_path, media):
+def test_enhanced_request_falls_open_when_qwen_unavailable(tmp_path, media):
     source, output = media
+    def core(_source, output_dir, _title, _job_dir, **_options):
+        parts = [output_dir / "PART_1.mp4", output_dir / "PART_2.mp4"]
+        for part in parts:
+            part.write_bytes(b"processed")
+        return parts
     bridge = ContentOpsProcessBridge(
-        records_path=tmp_path / "records.json", core=lambda *_: None,
+        records_path=tmp_path / "records.json", core=core,
         qwen_health=lambda: False,
     )
-    with pytest.raises(RequestError, match="QWEN_WORKER_UNAVAILABLE"):
-        bridge.submit(request(source, output, enhanced_content_selection=True))
-    assert bridge.records == {}
+    created, record = bridge.submit(request(source, output, enhanced_content_selection=True))
+    result = wait_done(bridge, record["external_id"])
+    assert created
+    assert result["state"] == "DONE"
     bridge.close()
 
 
@@ -108,6 +115,26 @@ def test_enhanced_flag_is_explicit_and_omitted_keeps_old_core_contract(tmp_path,
     assert calls == [{}, {"enhanced_content_selection": True}]
     with pytest.raises(RequestError, match="INVALID_REQUEST"):
         bridge.submit(request(source, output, handoff_id="badbool", enhanced_content_selection="yes"))
+    bridge.close()
+
+
+def test_shared_scheduler_records_origin_and_queue_position(tmp_path, media):
+    source, output = media
+    def core(input_path, output_dir, title, job_dir):
+        target = output_dir / f"{title}.mp4"
+        target.write_bytes(input_path.read_bytes())
+        return [target]
+    bridge = ContentOpsProcessBridge(records_path=tmp_path / "records.json", core=core, qwen_health=lambda: True)
+    bridge._health.update(status="READY", readiness="READY")
+    _, auto = bridge.submit(request(source, output, handoff_id="auto-1", origin="AUTO_YT_NOTIFI"))
+    _, manual = bridge.submit(request(source, output, handoff_id="manual-1", origin="MANUAL_LAN"))
+    assert auto["request"]["origin"] == "AUTO_YT_NOTIFI"
+    assert manual["request"]["origin"] == "MANUAL_LAN"
+    assert manual["queue_position"] in {1, 2}
+    assert bridge.status()["processing_concurrency"] == 1
+    wait_done(bridge, auto["external_id"])
+    wait_done(bridge, manual["external_id"])
+    assert bridge.status()["waiting_jobs"] == 0
     bridge.close()
 
 
@@ -180,10 +207,15 @@ def test_enhanced_failure_falls_open_to_normal_core(tmp_path, media):
     for part in parts:
         part.write_bytes(b"part")
     from enhanced_content_flow import EnhancedFlowSkipped
+    canonical_job = tmp_path / "canonical" / "job.json"
+    def run_pipeline(analysis_job, _job_dir, _source):
+        assert canonical_job.is_file()
+        assert json.loads(canonical_job.read_text(encoding="utf-8"))["id"] == analysis_job["id"]
     with (
         patch("enhanced_content_flow.run_enhanced_content_flow", side_effect=EnhancedFlowSkipped("no three parts")) as enhanced,
-            patch("backend.job_runner._pipeline"),
-        patch("backend.job_runner._run_semantic_stage", return_value={"status": "APPLIED"}),
+        patch("backend.job_runner._job_path", return_value=canonical_job),
+        patch("backend.job_runner._pipeline", side_effect=run_pipeline),
+        patch("backend.job_runner._run_semantic_stage", return_value={"status": "APPLIED"}) as semantic,
         patch("formatter.planner.plan_done_job", return_value={"formatter_status": "PLANNED"}),
         patch("formatter.renderer.render_format_plan", return_value={
             "formatter_status": "DONE", "formatted_outputs": [{"path": str(part)} for part in parts],
@@ -198,6 +230,35 @@ def test_enhanced_failure_falls_open_to_normal_core(tmp_path, media):
     assert job["enhanced_selection_status"] == "NOT_USABLE"
     assert job["effective_processing_mode"] == "NORMAL"
     assert job["enhanced_fallback_reason"] == "no three parts"
+    assert canonical_job.is_file()
+    semantic.assert_called_once()
+
+
+def test_enhanced_infrastructure_error_falls_open_to_normal_core(tmp_path, media):
+    source, output = media
+    job_dir = tmp_path / "error-fallback-job"
+    parts = [output / "PART_1.mp4", output / "PART_2.mp4"]
+    for part in parts:
+        part.write_bytes(b"part")
+    from enhanced_content_flow import EnhancedFlowError
+    with (
+        patch("enhanced_content_flow.run_enhanced_content_flow", side_effect=EnhancedFlowError("qwen timeout")),
+        patch("backend.job_runner._pipeline"),
+        patch("backend.job_runner._run_semantic_stage", return_value={"status": "APPLIED"}) as semantic,
+        patch("formatter.planner.plan_done_job", return_value={"formatter_status": "PLANNED"}),
+        patch("formatter.renderer.render_format_plan", return_value={
+            "formatter_status": "DONE", "formatted_outputs": [{"path": str(part)} for part in parts],
+        }),
+    ):
+        result = _production_part_core(
+            source, output, "Video title", job_dir, enhanced_content_selection=True,
+        )
+    assert result == parts
+    job = json.loads((job_dir / "job.json").read_text(encoding="utf-8"))
+    assert job["enhanced_selection_status"] == "ERROR"
+    assert job["effective_processing_mode"] == "NORMAL"
+    assert job["enhanced_fallback_reason"] == "qwen timeout"
+    semantic.assert_called_once()
 
 
 def test_unexpected_enhanced_error_is_not_silently_fallback(tmp_path, media):
@@ -294,10 +355,15 @@ def test_localhost_http_contract(tmp_path, media):
     bridge.close()
 
 
-def test_http_enhanced_request_returns_retryable_unavailable(tmp_path, media):
+def test_http_enhanced_request_falls_open_when_qwen_unavailable(tmp_path, media):
     source, output = media
+    def core(_source, output_dir, _title, _job_dir, **_options):
+        parts = [output_dir / "PART_1.mp4", output_dir / "PART_2.mp4"]
+        for part in parts:
+            part.write_bytes(b"processed")
+        return parts
     bridge = ContentOpsProcessBridge(
-        records_path=tmp_path / "records.json", port=0, core=lambda *_: [],
+        records_path=tmp_path / "records.json", port=0, core=core,
         qwen_health=lambda: False,
     )
     host, port = bridge.start()
@@ -305,7 +371,7 @@ def test_http_enhanced_request_returns_retryable_unavailable(tmp_path, media):
         "POST", f"http://{host}:{port}/api/process-jobs",
         request(source, output, enhanced_content_selection=True),
     )
-    assert status == 503
-    assert result["error"] == "QWEN_WORKER_UNAVAILABLE"
-    assert bridge.records == {}
+    assert status == 201
+    done = wait_done(bridge, result["external_id"])
+    assert done["state"] == "DONE"
     bridge.close()

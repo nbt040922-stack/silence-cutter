@@ -35,6 +35,9 @@ ENHANCED_COARSE = "\n".join(
     f"{center},{.99 - index * .05:.2f},topic {index}"
     for index, center in enumerate((80, 250, 430, 610, 790, 970))
 )
+ENHANCED_TWO_COARSE = "\n".join([
+    "400,0.99,topic one", "1200,0.95,topic two",
+])
 class LongVideoSelectorTests(unittest.TestCase):
     def test_short_video_does_not_invoke_qwen(self):
         with tempfile.TemporaryDirectory() as directory:
@@ -59,7 +62,48 @@ class LongVideoSelectorTests(unittest.TestCase):
         self.assertEqual(result["status"], "APPLIED")
         self.assertGreater(len(result["ranked_candidates"]), 3)
         self.assertEqual([item["part_index"] for item in result["selected_ranges"]], [1, 2, 3])
-        self.assertTrue(all(120 <= item["duration"] <= 300 for item in result["selected_ranges"]))
+        self.assertTrue(all(180 <= item["duration"] <= 300 for item in result["selected_ranges"]))
+
+    @patch("long_video_selector.selector._contact_sheets", return_value=[])
+    @patch("long_video_selector.selector._visual_candidates", return_value=([], []))
+    @patch("long_video_selector.selector._extract_sampled_frames", return_value=([Path("frame.jpg")], [0.0]))
+    def test_enhanced_accepts_exactly_two_valid_candidates(self, _extract, _visual, _sheets):
+        detector = FakeDetector([ENHANCED_TWO_COARSE])
+        with tempfile.TemporaryDirectory() as directory:
+            result = run_long_video_selector(
+                "source.mp4", 1800.0, Path(directory) / "selection.json",
+                enhanced=True, detector_factory=lambda: detector,
+            )
+        self.assertEqual(result["status"], "APPLIED")
+        self.assertEqual(len(result["selected_ranges"]), 2)
+        self.assertEqual(result["part_count"], 2)
+        self.assertEqual([item["part_index"] for item in result["selected_ranges"]], [1, 2])
+
+    @patch("long_video_selector.selector._contact_sheets", return_value=[])
+    @patch("long_video_selector.selector._visual_candidates", return_value=([], []))
+    @patch("long_video_selector.selector._extract_sampled_frames", return_value=([Path("frame.jpg")], [0.0]))
+    def test_enhanced_overlapping_two_candidates_fail_open(self, _extract, _visual, _sheets):
+        detector = FakeDetector(["400,0.99,topic one\n450,0.95,topic two"])
+        with tempfile.TemporaryDirectory() as directory:
+            result = run_long_video_selector(
+                "source.mp4", 1800.0, Path(directory) / "selection.json",
+                enhanced=True, detector_factory=lambda: detector,
+            )
+        self.assertEqual(result["status"], "LONG_VIDEO_SELECTOR_SKIPPED")
+        self.assertEqual(result["part_count"], 0)
+
+    @patch("long_video_selector.selector._contact_sheets", return_value=[])
+    @patch("long_video_selector.selector._visual_candidates", return_value=([], []))
+    @patch("long_video_selector.selector._extract_sampled_frames", return_value=([Path("frame.jpg")], [0.0]))
+    def test_enhanced_duplicate_two_candidates_fail_open(self, _extract, _visual, _sheets):
+        detector = FakeDetector(["400,0.99,same topic\n1200,0.95,same topic"])
+        with tempfile.TemporaryDirectory() as directory:
+            result = run_long_video_selector(
+                "source.mp4", 1800.0, Path(directory) / "selection.json",
+                enhanced=True, detector_factory=lambda: detector,
+            )
+        self.assertEqual(result["status"], "LONG_VIDEO_SELECTOR_SKIPPED")
+        self.assertEqual(result["part_count"], 0)
 
     def test_enhanced_insufficient_duration_skips_without_qwen(self):
         factory = Mock()
@@ -107,6 +151,7 @@ class LongVideoSelectorTests(unittest.TestCase):
             {"start": 600, "end": 900, "score": .7},
         ]
         self.assertTrue(validate_selected_ranges(valid, 1500))
+        self.assertTrue(validate_selected_ranges(valid[:2], 1500))
         for changed in (
             [valid[0], {"start": 170, "end": 370, "score": .8}, valid[2]],
             [valid[0], {"start": 300, "end": 400, "score": .8}, valid[2]],

@@ -1,0 +1,19 @@
+{
+  "schema_version": 1,
+  "original_title": "Renting vs Buying After 60: What Actually Makes Sense?",
+  "rewritten_title": "Renting vs Buying After 60: What Really Makes Sense?",
+  "safe_rewritten_title": "Renting vs Buying After 60_ What Really Makes Sense_",
+  "filename_base": "Renting vs Buying After 60_ What Really Makes Sense_",
+  "status": "APPLIED",
+  "model": "Qwen/Qwen2.5-VL-7B-Instruct-AWQ",
+  "generation_count": 2,
+  "retry_count": 1,
+  "guard_rejections": [
+    "markdown output"
+  ],
+  "model_load_count": 0,
+  "queue_wait_seconds": 2.0000006770715117e-06,
+  "generation_seconds": 39.08308609999949,
+  "total_seconds": 39.087015500001144,
+  "error": null
+}

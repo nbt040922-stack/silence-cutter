@@ -1,0 +1,17 @@
+{
+  "schema_version": 1,
+  "original_title": "Zero Dollars Left for Food? Here's What I Actually Eat",
+  "rewritten_title": "What I Really Eat When Money Runs Out",
+  "safe_rewritten_title": "What I Really Eat When Money Runs Out",
+  "filename_base": "What I Really Eat When Money Runs Out",
+  "status": "APPLIED",
+  "model": "Qwen/Qwen2.5-VL-7B-Instruct-AWQ",
+  "generation_count": 1,
+  "retry_count": 0,
+  "guard_rejections": [],
+  "model_load_count": 0,
+  "queue_wait_seconds": 7.999988156370819e-07,
+  "generation_seconds": 16.2195339999962,
+  "total_seconds": 16.221690300000773,
+  "error": null
+}

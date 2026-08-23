@@ -1,0 +1,19 @@
+{
+  "schema_version": 1,
+  "original_title": "I Stopped Buying These 10 Things and Saved $500 a Month",
+  "rewritten_title": "My Monthly Savings of $500 by Cutting Out These 10 Items",
+  "safe_rewritten_title": "My Monthly Savings of $500 by Cutting Out These 10 Items",
+  "filename_base": "My Monthly Savings of $500 by Cutting Out These 10 Items",
+  "status": "APPLIED",
+  "model": "Qwen/Qwen2.5-VL-7B-Instruct-AWQ",
+  "generation_count": 2,
+  "retry_count": 1,
+  "guard_rejections": [
+    "markdown output"
+  ],
+  "model_load_count": 0,
+  "queue_wait_seconds": 3.9000005926936865e-06,
+  "generation_seconds": 44.96834769999987,
+  "total_seconds": 44.99312259999715,
+  "error": null
+}

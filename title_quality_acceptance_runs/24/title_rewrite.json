@@ -1,0 +1,17 @@
+{
+  "schema_version": 1,
+  "original_title": "STOP Buying These Grocery Items in Bulk",
+  "rewritten_title": "Bulk Grocery Buys You Should Absolutely Avoid",
+  "safe_rewritten_title": "Bulk Grocery Buys You Should Absolutely Avoid",
+  "filename_base": "Bulk Grocery Buys You Should Absolutely Avoid",
+  "status": "APPLIED",
+  "model": "Qwen/Qwen2.5-VL-7B-Instruct-AWQ",
+  "generation_count": 1,
+  "retry_count": 0,
+  "guard_rejections": [],
+  "model_load_count": 0,
+  "queue_wait_seconds": 1.1000010999850929e-06,
+  "generation_seconds": 15.573494500000379,
+  "total_seconds": 15.586322199997085,
+  "error": null
+}

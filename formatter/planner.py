@@ -181,22 +181,36 @@ def fit_title(title: str, banner: dict[str, int]) -> dict[str, Any]:
     language, confidence = detect_title_language(title)
     font_path, family, variable = _font_for_language(language)
     text_width = banner["max_width"] - banner["horizontal_padding"] * 2
+    display_title = title.strip()
     chosen: tuple[int, Any, list[str], int, int] | None = None
-    for pixels in (62, 56, 51, 46):
-        font = _load_font(font_path, pixels, bold_variable=variable)
-        emoji_font = _load_font(FONT_DIR / "NotoEmoji-Variable.ttf", pixels, bold_variable=True)
-        lines = _wrap_title(title.strip(), font, text_width, emoji_font)
-        line_height = math.ceil(font.getbbox("Ag")[3] - font.getbbox("Ag")[1]) + 10
-        measured = max((_text_width(font, line, emoji_font) for line in lines), default=0)
-        if len(lines) <= 3 and measured <= text_width:
-            chosen = pixels, font, lines, measured, line_height
-            break
+
+    def choose(value: str) -> tuple[int, Any, list[str], int, int] | None:
+        for pixels in (62, 56, 51, 46):
+            font = _load_font(font_path, pixels, bold_variable=variable)
+            emoji_font = _load_font(FONT_DIR / "NotoEmoji-Variable.ttf", pixels, bold_variable=True)
+            lines = _wrap_title(value, font, text_width, emoji_font)
+            line_height = math.ceil(font.getbbox("Ag")[3] - font.getbbox("Ag")[1]) + 10
+            measured = max((_text_width(font, line, emoji_font) for line in lines), default=0)
+            if len(lines) <= 3 and measured <= text_width:
+                return pixels, font, lines, measured, line_height
+        return None
+
+    chosen = choose(display_title)
+    if chosen is None:
+        # A model fallback can still be too wide in a proportional CJK font.
+        # Trim only the banner text; preserve the original title in job metadata.
+        for length in range(len(display_title) - 1, 7, -1):
+            candidate = display_title[:length].rstrip(" …") + "…"
+            chosen = choose(candidate)
+            if chosen is not None:
+                display_title = candidate
+                break
     if chosen is None:
         raise ValueError("source title cannot fit safely within three lines")
     pixels, _font, lines, measured, line_height = chosen
     logical_size = {62: 12, 56: 11, 51: 10, 46: 9}[pixels]
     return {
-        "source_title": title,
+        "source_title": display_title,
         "language": language,
         "language_confidence": confidence,
         "selected_font": family + " + Noto Emoji",
@@ -524,7 +538,9 @@ def plan_done_job(
     part_count = 2 if clean_duration < 600 else 3
     from .title_rewrite import read_title_rewrite
     rewrite = read_title_rewrite(job_dir, str(job["title"]))
-    title = fit_title(str(job["title"]), TITLE_BANNER)
+    # Use the accepted rewrite for the rendered title banner.  The original
+    # title remains in the plan for traceability and fallback behavior.
+    title = fit_title(rewrite["rewritten_title"], TITLE_BANNER)
     part_label_template = PART_LABELS[title["language"]]
     target = Path(output_path).expanduser().resolve()
     speech_intervals = debug.get("union_intervals") or []

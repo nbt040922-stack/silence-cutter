@@ -1,0 +1,22 @@
+[
+  {
+    "job": 2,
+    "status": "DONE",
+    "wall_time": 194.9478898999987,
+    "outputs": [
+      "D:\\Silence_cutter\\warm_acceptance_job2\\outputs\\PART_1.mp4",
+      "D:\\Silence_cutter\\warm_acceptance_job2\\outputs\\PART_2.mp4",
+      "D:\\Silence_cutter\\warm_acceptance_job2\\outputs\\PART_3.mp4"
+    ]
+  },
+  {
+    "job": 3,
+    "status": "DONE",
+    "wall_time": 177.66070919999947,
+    "outputs": [
+      "D:\\Silence_cutter\\warm_acceptance_job3\\outputs\\PART_1.mp4",
+      "D:\\Silence_cutter\\warm_acceptance_job3\\outputs\\PART_2.mp4",
+      "D:\\Silence_cutter\\warm_acceptance_job3\\outputs\\PART_3.mp4"
+    ]
+  }
+]

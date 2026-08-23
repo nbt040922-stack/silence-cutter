@@ -1,0 +1,19 @@
+{
+  "schema_version": 1,
+  "original_title": "8 Retirement Mistakes That Cost More Than You Think",
+  "rewritten_title": "8 Retirement Mistakes Costing More Than You Realize",
+  "safe_rewritten_title": "8 Retirement Mistakes Costing More Than You Realize",
+  "filename_base": "8 Retirement Mistakes Costing More Than You Realize",
+  "status": "APPLIED",
+  "model": "Qwen/Qwen2.5-VL-7B-Instruct-AWQ",
+  "generation_count": 2,
+  "retry_count": 1,
+  "guard_rejections": [
+    "title removes all useful numbers"
+  ],
+  "model_load_count": 0,
+  "queue_wait_seconds": 1.7999991541728377e-06,
+  "generation_seconds": 31.292575099992973,
+  "total_seconds": 31.29590889999963,
+  "error": null
+}

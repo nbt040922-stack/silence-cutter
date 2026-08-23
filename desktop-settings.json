@@ -1,0 +1,19 @@
+{
+  "workspace_folder": "D:\\Silence_cutter\\workspace",
+  "input_folder": "D:\\Vlog\\Input",
+  "output_folder": "\\\\192.168.1.18\\Team 1\\ContentOps",
+  "input_mode": "LOCAL_FOLDER",
+  "watch_input_folder": false,
+  "local_file_stability_seconds": 7.0,
+  "max_concurrent_jobs": 1,
+  "download_concurrency": 1,
+  "process_concurrency": 1,
+  "prefetch_depth": 1,
+  "download_cooldown_min_seconds": 55,
+  "download_cooldown_max_seconds": 70,
+  "max_download_retries": 3,
+  "keep_clean_master": false,
+  "youtube_profile_path": "D:\\Silence_cutter\\youtube_profile",
+  "last_session_test": null,
+  "last_session_status": null
+}

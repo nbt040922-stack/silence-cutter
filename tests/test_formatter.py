@@ -251,6 +251,12 @@ class FormatterTests(unittest.TestCase):
         self.assertLessEqual(len(long["wrapped_lines"]), 3)
         self.assertLessEqual(long["measured_width"], long["safe_text_width"])
 
+    def test_long_japanese_title_gets_safe_fallback_for_retry(self):
+        title = "【GRWM】大寝坊回避したのにディズニーデート楽しみすぎて一睡もできなかった日の朝は案の定チェックアウトギリギリで詰みました..."
+        fitted = fit_title(title, TITLE_BANNER)
+        self.assertLessEqual(len(fitted["wrapped_lines"]), 3)
+        self.assertLessEqual(fitted["measured_width"], fitted["safe_text_width"])
+
     def test_content_fit_banner_geometry_and_vertical_spacing(self):
         short = fit_title("Simple vlog", TITLE_BANNER)
         short_layout = build_layout(short, "PART 1")
@@ -336,6 +342,12 @@ class FormatterTests(unittest.TestCase):
                 "id": "job", "status": "DONE", "title": "Source title",
                 "report_path": str(report), "output_path": str(clean),
             }), encoding="utf-8")
+            (root / "title_rewrite.json").write_text(json.dumps({
+                "original_title": "Source title",
+                "rewritten_title": "Sharper rewritten title",
+                "filename_base": "Sharper rewritten title",
+                "status": "APPLIED",
+            }), encoding="utf-8")
             plan_path = root / "format_plan.json"
             preview_path = root / "part1_preview.png"
             with (
@@ -349,7 +361,9 @@ class FormatterTests(unittest.TestCase):
                 )
             silero.assert_not_called()
             sensevoice.assert_not_called()
-            self.assertEqual(plan["title"]["source_title"], "Source title")
+            self.assertEqual(plan["title"]["source_title"], "Sharper rewritten title")
+            self.assertEqual(plan["original_title"], "Source title")
+            self.assertEqual(plan["rewritten_title"], "Sharper rewritten title")
             self.assertEqual(plan["title"]["language"], "unknown")
             self.assertEqual(plan["part_label_template"], "PART {number}")
             self.assertEqual(plan["detector_reuse"], {

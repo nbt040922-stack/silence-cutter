@@ -1,0 +1,19 @@
+{
+  "schema_version": 1,
+  "original_title": "We Sold Everything and Moved Across the World",
+  "rewritten_title": "Our Life-Changing Journey of Selling Everything and Moving Across the Globe",
+  "safe_rewritten_title": "Our Life-Changing Journey of Selling Everything and Moving Across the Globe",
+  "filename_base": "Our Life-Changing Journey of Selling Everything and Moving Across the Globe",
+  "status": "APPLIED",
+  "model": "Qwen/Qwen2.5-VL-7B-Instruct-AWQ",
+  "generation_count": 2,
+  "retry_count": 1,
+  "guard_rejections": [
+    "markdown output"
+  ],
+  "model_load_count": 0,
+  "queue_wait_seconds": 1.8999999156221747e-06,
+  "generation_seconds": 36.604837200000475,
+  "total_seconds": 36.608756400004495,
+  "error": null
+}

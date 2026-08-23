@@ -1,0 +1,17 @@
+{
+  "schema_version": 1,
+  "original_title": "Gia đình 4 người chi tiêu thế nào với 5 triệu mỗi tháng?",
+  "rewritten_title": "Gia đình 4 người tiết kiệm 5 triệu mỗi tháng như thế nào?",
+  "safe_rewritten_title": "Gia đình 4 người tiết kiệm 5 triệu mỗi tháng như thế nào_",
+  "filename_base": "Gia đình 4 người tiết kiệm 5 triệu mỗi tháng như thế nào_",
+  "status": "APPLIED",
+  "model": "Qwen/Qwen2.5-VL-7B-Instruct-AWQ",
+  "generation_count": 1,
+  "retry_count": 0,
+  "guard_rejections": [],
+  "model_load_count": 0,
+  "queue_wait_seconds": 7.999988156370819e-07,
+  "generation_seconds": 22.786919700003637,
+  "total_seconds": 22.789276100003917,
+  "error": null
+}

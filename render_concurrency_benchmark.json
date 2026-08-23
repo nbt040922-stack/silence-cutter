@@ -1,0 +1,92 @@
+{
+  "source": "D:\\Silence_cutter\\workspace\\jobs\\e0977fe04cbb4524a75e35d9174fdf2c\\source.mp4",
+  "source_codec": "av1",
+  "decoder": "av1_cuvid",
+  "qwen_resident": true,
+  "results": [
+    {
+      "concurrency": 1,
+      "wall_time": 83.06533049999962,
+      "parts": [
+        {
+          "index": 1,
+          "render_time": 26.586535300000833,
+          "speed": 8.527624883863409,
+          "duration_error": 2.842170943040401e-14,
+          "av_delta": 0.020000000000010232
+        },
+        {
+          "index": 2,
+          "render_time": 28.524573099999543,
+          "speed": 8.413798136737192,
+          "duration_error": 0.0,
+          "av_delta": 0.003999999999990678
+        },
+        {
+          "index": 3,
+          "render_time": 27.52565969999887,
+          "speed": 8.719137074851284,
+          "duration_error": 0.0,
+          "av_delta": 0.006000000000000227
+        }
+      ],
+      "valid": true
+    },
+    {
+      "concurrency": 2,
+      "wall_time": 70.25767949999863,
+      "parts": [
+        {
+          "index": 1,
+          "render_time": 41.660323199999766,
+          "speed": 5.442108524016475,
+          "duration_error": 2.842170943040401e-14,
+          "av_delta": 0.020000000000010232
+        },
+        {
+          "index": 2,
+          "render_time": 43.30420099999901,
+          "speed": 5.54218746583052,
+          "duration_error": 0.0,
+          "av_delta": 0.003999999999990678
+        },
+        {
+          "index": 3,
+          "render_time": 28.209037300001,
+          "speed": 8.507911753514236,
+          "duration_error": 0.0,
+          "av_delta": 0.006000000000000227
+        }
+      ],
+      "valid": true
+    },
+    {
+      "concurrency": 3,
+      "wall_time": 57.41824209999868,
+      "parts": [
+        {
+          "index": 1,
+          "render_time": 56.39027100000021,
+          "speed": 4.020551701196811,
+          "duration_error": 2.842170943040401e-14,
+          "av_delta": 0.020000000000010232
+        },
+        {
+          "index": 2,
+          "render_time": 57.226153200001136,
+          "speed": 4.193886651112437,
+          "duration_error": 0.0,
+          "av_delta": 0.003999999999990678
+        },
+        {
+          "index": 3,
+          "render_time": 56.83385950000047,
+          "speed": 4.222834805016154,
+          "duration_error": 0.0,
+          "av_delta": 0.006000000000000227
+        }
+      ],
+      "valid": true
+    }
+  ]
+}

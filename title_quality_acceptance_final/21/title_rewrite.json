@@ -1,0 +1,17 @@
+{
+  "schema_version": 1,
+  "original_title": "25 Cheap Meals That Don't Taste Cheap",
+  "rewritten_title": "25 Budget-Friendly Meals That Taste Amazing",
+  "safe_rewritten_title": "25 Budget-Friendly Meals That Taste Amazing",
+  "filename_base": "25 Budget-Friendly Meals That Taste Amazing",
+  "status": "APPLIED",
+  "model": "Qwen/Qwen2.5-VL-7B-Instruct-AWQ",
+  "generation_count": 1,
+  "retry_count": 0,
+  "guard_rejections": [],
+  "model_load_count": 0,
+  "queue_wait_seconds": 8.00006091594696e-07,
+  "generation_seconds": 16.84976939999615,
+  "total_seconds": 16.852029599998787,
+  "error": null
+}

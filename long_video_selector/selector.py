@@ -96,29 +96,32 @@ def _select_ranked_ranges(
                 "score": candidate["score"], "topic": candidate["topic"],
                 "reason": candidate["reason"]}
         viable.append(item)
-    best = None
-    for group in itertools.combinations(viable, 3):
-        ordered = sorted(group, key=lambda item: item["start"])
-        if any(_duplicate_topic(left["topic"], right["topic"])
-               for left, right in itertools.combinations(ordered, 2)):
-            continue
-        if any(left["end"] > right["start"] for left, right in zip(ordered, ordered[1:])):
-            continue
-        span = (ordered[-1]["end"] - ordered[0]["start"]) / duration
-        centers = [(item["start"] + item["end"]) / 2 for item in ordered]
-        minimum_separation = min(
-            right - left for left, right in zip(centers, centers[1:])
-        ) / duration
-        value = sum(item["score"] for item in ordered) + 0.30 * span + 0.30 * minimum_separation
-        if best is None or value > best[0]:
-            best = value, ordered
-    return best[1] if best else []
+    def best_group(count: int) -> list[dict[str, Any]]:
+        best = None
+        for group in itertools.combinations(viable, count):
+            ordered = sorted(group, key=lambda item: item["start"])
+            if any(_duplicate_topic(left["topic"], right["topic"])
+                   for left, right in itertools.combinations(ordered, 2)):
+                continue
+            if any(left["end"] > right["start"] for left, right in zip(ordered, ordered[1:])):
+                continue
+            span = (ordered[-1]["end"] - ordered[0]["start"]) / duration
+            centers = [(item["start"] + item["end"]) / 2 for item in ordered]
+            minimum_separation = min(
+                right - left for left, right in zip(centers, centers[1:])
+            ) / duration
+            value = sum(item["score"] for item in ordered) + 0.30 * span + 0.30 * minimum_separation
+            if best is None or value > best[0]:
+                best = value, ordered
+        return best[1] if best else []
+
+    return best_group(3) or best_group(2)
 
 
 def validate_selected_ranges(
     ranges: Any, duration: float, *, minimum: float = 180.0,
 ) -> bool:
-    if not isinstance(ranges, list) or len(ranges) != 3:
+    if not isinstance(ranges, list) or len(ranges) not in {2, 3}:
         return False
     previous_end = -1.0
     total = 0.0
@@ -149,7 +152,8 @@ def constrain_keep_intervals(
 
 def _skipped(duration: float, config: LongVideoSelectorConfig, reason: str) -> dict[str, Any]:
     return {"status": "LONG_VIDEO_SELECTOR_SKIPPED", "source_duration": duration,
-            "threshold": config.threshold, "selected_ranges": [], "reason": reason}
+            "threshold": config.threshold, "selected_ranges": [], "part_count": 0,
+            "reason": reason}
 
 
 def run_long_video_selector(
@@ -161,9 +165,10 @@ def run_long_video_selector(
 ) -> dict[str, Any]:
     config = config or LongVideoSelectorConfig.from_environment()
     destination, source_path = Path(output), Path(source)
-    minimum = 120.0 if enhanced else 180.0
-    if enhanced and duration * 0.70 < minimum * 3:
-        result = _skipped(duration, config, "insufficient duration for three ranges")
+    minimum = 180.0
+    required_parts = 2 if enhanced else 3
+    if enhanced and duration * 0.70 < minimum * required_parts:
+        result = _skipped(duration, config, "insufficient duration for two ranges")
         result["status"] = "ENHANCED_SELECTOR_SKIPPED_INSUFFICIENT_DURATION"
         _write(destination, result)
         return result
@@ -207,13 +212,15 @@ def run_long_video_selector(
             ranking_started = time.perf_counter()
             ranked = _ranked_candidates(coarse_text, duration)
             ranking_time = time.perf_counter() - ranking_started
-            if len(ranked) < 3:
-                raise ValueError(f"fewer than 3 valid ranked candidates: {coarse_text[:500]!r}")
+            if len(ranked) < required_parts:
+                raise ValueError(
+                    f"fewer than {required_parts} valid ranked candidates: {coarse_text[:500]!r}"
+                )
             target = enhanced_target_duration(duration) if enhanced else adaptive_target_duration(duration)
             selected = _select_ranked_ranges(ranked, duration, target, minimum)
-            if len(selected) < 3:
+            if len(selected) < required_parts:
                 raise ValueError(
-                    f"fewer than 3 non-overlapping diverse candidates: {ranked!r}"
+                    f"fewer than {required_parts} non-overlapping diverse candidates: {ranked!r}"
                 )
             fine_paths, fine_times = [], []
             extraction_started = time.perf_counter()
@@ -231,9 +238,12 @@ def run_long_video_selector(
             _visual_candidates(fine_paths, fine_times, duration)
             refinement_time = time.perf_counter() - refinement_started
         if not validate_selected_ranges(selected, duration, minimum=minimum):
-            raise ValueError("final selection is not exactly 3 valid diverse ranges")
+            raise ValueError("final selection is not 2 or 3 valid diverse ranges")
+        if not enhanced and len(selected) != 3:
+            raise ValueError("normal selector requires exactly 3 ranges")
         result = {
             "status": "APPLIED", "source_duration": duration, "threshold": config.threshold,
+            "part_count": len(selected),
             "coarse_chunk_count": len(paths), "sampled_frame_count": len(paths) + len(fine_paths),
             "generation_count": detector.generation_count, "candidate_count": len(ranked),
             "ranked_candidates": ranked,

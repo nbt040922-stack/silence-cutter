@@ -26,15 +26,13 @@ from silence_cutter.audio import probe_media
 
 
 class EnhancedFlowSkipped(RuntimeError):
-    pass
+    status = "ENHANCED_NOT_USABLE"
 
 
 class EnhancedFlowError(RuntimeError):
-    """Unexpected enhanced infrastructure/processing failure.
+    """Enhanced infrastructure/processing failure, classified for fail-open fallback."""
 
-    Selection constraints use EnhancedFlowSkipped and fail open; unexpected
-    errors remain real failures so they are not silently hidden by fallback.
-    """
+    status = "ENHANCED_ERROR"
 
 
 _RUNTIME: ProductionRuntime | None = None
@@ -56,7 +54,7 @@ def _write(path: Path, value: dict[str, Any]) -> None:
     os.replace(temporary, path)
 
 
-def recover_three_parts(
+def recover_enhanced_parts(
     candidates: list[dict[str, Any]], duration: float,
     process: Callable[[dict[str, Any], dict[str, float]], dict[str, Any]],
 ) -> tuple[list[dict[str, Any]], list[dict[str, Any]]]:
@@ -70,26 +68,34 @@ def recover_three_parts(
         attempts = [target] + ([] if target >= 300 else [300.0])
         result = None
         for length in attempts:
-            start, end = _form_range(candidate["center"], length, duration, 120.0)
+            start, end = _form_range(candidate["center"], length, duration, 180.0)
             scope = {"start": start, "end": end}
             if any(start < item["range"]["end"] and item["range"]["start"] < end for item in accepted):
                 continue
             attempt = process(candidate, scope)
-            if 60.0 < float(attempt["final_duration"]) <= 300.0:
+            if 180.0 <= float(attempt["final_duration"]) <= 300.0:
                 result = attempt | {"candidate": candidate, "range": scope}
                 break
         if result is None:
-            rejected.append(candidate | {"rejection_reason": "no valid >60s non-overlapping result"})
+            rejected.append(candidate | {"rejection_reason": "no valid 180-300s non-overlapping result"})
             continue
         accepted.append(result)
         if len(accepted) == 3:
             break
-    if len(accepted) != 3:
-        raise EnhancedFlowSkipped("could not recover exactly three eligible parts")
+    if len(accepted) < 2:
+        raise EnhancedFlowSkipped("could not recover two eligible parts")
     accepted.sort(key=lambda item: item["range"]["start"])
     for index, item in enumerate(accepted, 1):
         item["part_index"] = index
     return accepted, rejected
+
+
+def recover_three_parts(
+    candidates: list[dict[str, Any]], duration: float,
+    process: Callable[[dict[str, Any], dict[str, float]], dict[str, Any]],
+) -> tuple[list[dict[str, Any]], list[dict[str, Any]]]:
+    """Backward-compatible name for the 2-or-3 part recovery policy."""
+    return recover_enhanced_parts(candidates, duration, process)
 
 
 def _format_plan(
@@ -122,10 +128,13 @@ def _format_plan(
         "id": job_dir.name, "status": "DONE", "title": title_text,
         "source_path": str(source), "output_folder": str(output_dir), "output_path": None,
     }, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
+    part_count = len(parts)
+    if part_count not in {2, 3}:
+        raise ValueError("enhanced format plan requires two or three parts")
     plan = {
-        "schema_version": 2, "formatter_status": "PLANNED", "part_count": 3,
+        "schema_version": 2, "formatter_status": "PLANNED", "part_count": part_count,
         "enhanced_content_selection": True, "direct_source_render": True,
-        "render_concurrency": 3,
+        "render_concurrency": part_count,
         "source_job_id": job_dir.name, "source_job_path": str(job_file),
         "source_video_path": str(source), "clean_video_path": None,
         "render_segments": mapping, "input_duration": duration,
@@ -178,8 +187,11 @@ def run_enhanced_content_flow(
             config=LongVideoSelectorConfig.from_environment(), enhanced=True,
         )
     if selection.get("status") != "APPLIED":
-        artifact = {"status": "ENHANCED_CONTENT_SELECTION_SKIPPED",
-                    "source_duration": duration, "reason": selection.get("reason") or selection.get("status")}
+        artifact = {
+            "status": "ENHANCED_NOT_USABLE", "part_count": 0,
+            "source_duration": duration,
+            "reason": selection.get("reason") or selection.get("status"),
+        }
         _write(artifact_path, artifact)
         shutil.rmtree(visual_cache, ignore_errors=True)
         raise EnhancedFlowSkipped(artifact["reason"])
@@ -264,7 +276,7 @@ def run_enhanced_content_flow(
         ranked = selection["ranked_candidates"]
         preferred = [item for topic in chosen_topics for item in ranked if item["topic"] == topic]
         alternates = [item for item in ranked if item not in preferred]
-        parts, rejected = recover_three_parts(preferred + alternates, duration, process)
+        parts, rejected = recover_enhanced_parts(preferred + alternates, duration, process)
         for part in parts:
             index = part["part_index"]
             semantic_path = job_dir / f"semantic_segments_part_{index}.json"
@@ -279,16 +291,17 @@ def run_enhanced_content_flow(
         except (OSError, ValueError):
             source_id = job_dir.name
         rewrite = rewrite_title_once(
-            job_dir, title, output_dir, source_id=source_id, part_count=3,
+            job_dir, title, output_dir, source_id=source_id, part_count=len(parts),
             client=semantic_detector,
         )
         plan_path = _format_plan(source, output_dir, title, job_dir, parts, duration, rewrite)
         rendered = renderer(plan_path)
         outputs = [Path(item["path"]) for item in rendered.get("formatted_outputs") or []]
-        if rendered.get("formatter_status") != "DONE" or len(outputs) != 3:
+        if rendered.get("formatter_status") != "DONE" or len(outputs) != len(parts):
             raise EnhancedFlowSkipped(rendered.get("formatter_error") or "enhanced render failed")
         artifact = {
-            "status": "APPLIED", "source_duration": duration,
+            "status": f"ENHANCED_SUCCESS_{len(parts)}", "source_duration": duration,
+            "part_count": len(parts),
             "ranked_candidates": selection["ranked_candidates"],
             "rejected_candidates": rejected, "parts": [{
                 key: value for key, value in item.items() if key != "candidate"
@@ -321,11 +334,16 @@ def run_enhanced_content_flow(
         _write(artifact_path, artifact)
         shutil.rmtree(visual_cache, ignore_errors=True)
         return outputs
-    except EnhancedFlowSkipped:
+    except EnhancedFlowSkipped as exc:
+        if not artifact_path.exists():
+            _write(artifact_path, {
+                "status": "ENHANCED_NOT_USABLE", "part_count": 0,
+                "source_duration": duration, "reason": str(exc),
+            })
         raise
     except Exception as exc:
         artifact = {
-            "status": "ENHANCED_CONTENT_SELECTION_SKIPPED", "source_duration": duration,
+            "status": "ENHANCED_ERROR", "part_count": 0, "source_duration": duration,
             "ranked_candidates": selection.get("ranked_candidates") or [],
             "reason": f"{type(exc).__name__}: {exc}",
             "total_processing_time": time.perf_counter() - started,

@@ -1,0 +1,19 @@
+{
+  "schema_version": 1,
+  "original_title": "My Simple Morning Routine Changed My Entire Day",
+  "rewritten_title": "How My Simple Morning Routine Transformed My Day",
+  "safe_rewritten_title": "How My Simple Morning Routine Transformed My Day",
+  "filename_base": "How My Simple Morning Routine Transformed My Day",
+  "status": "APPLIED",
+  "model": "Qwen/Qwen2.5-VL-7B-Instruct-AWQ",
+  "generation_count": 2,
+  "retry_count": 1,
+  "guard_rejections": [
+    "markdown output"
+  ],
+  "model_load_count": 0,
+  "queue_wait_seconds": 2.3000029614195228e-06,
+  "generation_seconds": 30.67451450000226,
+  "total_seconds": 30.697946599997522,
+  "error": null
+}

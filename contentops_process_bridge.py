@@ -23,6 +23,7 @@ from urllib.parse import unquote, urlsplit
 ROOT = Path(__file__).resolve().parent
 LOOPBACK = "127.0.0.1"
 ACTIVE_STATES = {"QUEUED", "PROCESSING", "FINALIZING"}
+ORIGINS = {"AUTO_YT_NOTIFI", "MANUAL_LAN"}
 QWEN_ENDPOINT = os.getenv("SILENCE_QWEN_ENDPOINT", os.getenv("QWEN_ENDPOINT", "http://127.0.0.1:8792")).rstrip("/")
 BRIDGE_BUILD = os.getenv("SILENCE_BRIDGE_BUILD", "dev")
 
@@ -113,7 +114,9 @@ def _production_part_core(
     enhanced_status = "NOT_REQUESTED"
     enhanced_reason = None
     if enhanced_content_selection:
-        from enhanced_content_flow import EnhancedFlowSkipped, run_enhanced_content_flow
+        from enhanced_content_flow import (
+            EnhancedFlowError, EnhancedFlowSkipped, run_enhanced_content_flow,
+        )
 
         try:
             outputs = run_enhanced_content_flow(source, output_dir, title, job_dir)
@@ -121,7 +124,10 @@ def _production_part_core(
         except EnhancedFlowSkipped as exc:
             enhanced_status = "NOT_USABLE"
             enhanced_reason = str(exc)
-    from backend.job_runner import _pipeline, _run_semantic_stage
+        except EnhancedFlowError as exc:
+            enhanced_status = "ERROR"
+            enhanced_reason = str(exc)
+    from backend.job_runner import _job_path, _pipeline, _run_semantic_stage
     from formatter.planner import plan_done_job
     from formatter.renderer import render_format_plan
     from formatter.title_rewrite import rewrite_title_once
@@ -139,6 +145,11 @@ def _production_part_core(
         "title": title, "source_path": str(source),
         "status": "ANALYZING", "progress": None, "error": None,
     }
+    canonical_job_path = _job_path(analysis_job["id"])
+    canonical_job_path.parent.mkdir(parents=True, exist_ok=True)
+    canonical_job_path.write_text(
+        json.dumps(analysis_job, ensure_ascii=False, indent=2) + "\n", encoding="utf-8",
+    )
     try:
         _pipeline(analysis_job, job_dir, source)
     except Exception as exc:
@@ -207,7 +218,8 @@ class ContentOpsProcessBridge:
         self.qwen_health = qwen_health
         self.records: dict[str, dict[str, Any]] = {}
         self._lock = threading.RLock()
-        self._executor = ThreadPoolExecutor(max_workers=max(1, max_concurrency), thread_name_prefix="contentops-process")
+        self.processing_concurrency = 1
+        self._executor = ThreadPoolExecutor(max_workers=1, thread_name_prefix="contentops-process")
         self._server: ThreadingHTTPServer | None = None
         self._server_thread: threading.Thread | None = None
         self._health = runtime_health(host=host, port=port, qwen_probe=qwen_health)
@@ -218,6 +230,9 @@ class ContentOpsProcessBridge:
             rows = json.loads(self.records_path.read_text(encoding="utf-8"))
             if isinstance(rows, list):
                 self.records = {str(row["handoff_id"]): row for row in rows}
+                for row in self.records.values():
+                    row.setdefault("origin", row.get("request", {}).get("origin", "AUTO_YT_NOTIFI"))
+                    row.setdefault("queue_position", 0)
         except (OSError, ValueError, TypeError, KeyError):
             self.records = {}
 
@@ -233,14 +248,16 @@ class ContentOpsProcessBridge:
         request = {key: str(payload.get(key) or "").strip() for key in (
             "handoff_id", "source_file", "channel_name", "output_dir", "video_id", "video_title"
         )}
+        origin = str(payload.get("origin") or "AUTO_YT_NOTIFI").strip().upper()
+        if origin not in ORIGINS:
+            raise RequestError("INVALID_REQUEST")
+        request["origin"] = origin
         enhanced = payload.get("enhanced_content_selection", False)
         if not isinstance(enhanced, bool):
             raise RequestError("INVALID_REQUEST")
         request["enhanced_content_selection"] = enhanced
         if self._health["status"] != "READY":
             raise RequestError("BRIDGE_NOT_READY")
-        if enhanced and not self.qwen_health():
-            raise RequestError("QWEN_WORKER_UNAVAILABLE")
         if not re.fullmatch(r"[A-Za-z0-9._-]{1,128}", request["handoff_id"]):
             raise RequestError("INVALID_REQUEST")
         if not re.fullmatch(r"[A-Za-z0-9_-]{11}", request["video_id"]):
@@ -272,9 +289,13 @@ class ContentOpsProcessBridge:
             record = {
                 "handoff_id": request["handoff_id"], "external_id": external_id,
                 "request": request, "state": "QUEUED", "progress_percent": 0,
+                "origin": request["origin"], "queue_position": 0,
                 "processed_files": [], "processed_file_path": None, "error": None,
                 "created_at": now, "updated_at": now,
             }
+            record["queue_position"] = 1 + sum(
+                item.get("state") in ACTIVE_STATES for item in self.records.values()
+            )
             self.records[request["handoff_id"]] = record
             self._save()
             try:
@@ -284,6 +305,30 @@ class ContentOpsProcessBridge:
                 self._save()
                 raise
             return True, dict(record)
+
+    def status(self) -> dict[str, Any]:
+        with self._lock:
+            active = next(
+                (item for item in self.records.values() if item.get("state") in {"PROCESSING", "FINALIZING"}),
+                None,
+            )
+            waiting = [item for item in self.records.values() if item.get("state") == "QUEUED"]
+            waiting.sort(key=lambda item: (item.get("created_at") or "", item.get("handoff_id") or ""))
+            queue = [
+                {
+                    "queue_position": index, "handoff_id": item["handoff_id"],
+                    "external_id": item["external_id"], "origin": item.get("origin"),
+                    "video_id": item.get("request", {}).get("video_id"),
+                }
+                for index, item in enumerate(waiting, 1)
+            ]
+            return {
+                "active_job": active and active["external_id"],
+                "active_origin": active and active.get("origin"),
+                "waiting_jobs": len(queue), "queue": queue,
+                "processing_concurrency": self.processing_concurrency,
+                "qwen_status": self._health.get("qwen_status"),
+            }
 
     def get(self, external_id: str) -> dict[str, Any] | None:
         with self._lock:
@@ -408,7 +453,9 @@ class ContentOpsProcessBridge:
                         host=bridge.host, port=bridge.port, qwen_probe=bridge.qwen_health,
                     )
                     status = 200 if bridge._health["status"] == "READY" else 503
-                    return self.send_json(status, bridge._health)
+                    return self.send_json(status, bridge._health | bridge.status())
+                if path == "/status":
+                    return self.send_json(200, bridge.status())
                 prefix = "/api/process-jobs/"
                 if path.startswith(prefix):
                     record = bridge.get(unquote(path[len(prefix):]))

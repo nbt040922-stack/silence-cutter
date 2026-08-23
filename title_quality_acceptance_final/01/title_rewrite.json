@@ -1,0 +1,19 @@
+{
+  "schema_version": 1,
+  "original_title": "I Live Alone in Retirement and It's a Game Changer!",
+  "rewritten_title": "Why Living Alone in Retirement Changed Everything",
+  "safe_rewritten_title": "Why Living Alone in Retirement Changed Everything",
+  "filename_base": "Why Living Alone in Retirement Changed Everything",
+  "status": "APPLIED",
+  "model": "Qwen/Qwen2.5-VL-7B-Instruct-AWQ",
+  "generation_count": 2,
+  "retry_count": 1,
+  "guard_rejections": [
+    "markdown output"
+  ],
+  "model_load_count": 0,
+  "queue_wait_seconds": 1.4999968698248267e-06,
+  "generation_seconds": 27.0027878999972,
+  "total_seconds": 27.0094831000024,
+  "error": null
+}

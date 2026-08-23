@@ -10,7 +10,7 @@ from .selector import LongVideoSelectorConfig, run_long_video_selector
 
 
 def main() -> None:
-    parser = argparse.ArgumentParser(description="Select the best three ranges in a long video")
+    parser = argparse.ArgumentParser(description="Select the best two or three ranges in a long video")
     parser.add_argument("source", type=Path)
     parser.add_argument("--output", type=Path, required=True)
     parser.add_argument("--enhanced", action="store_true")

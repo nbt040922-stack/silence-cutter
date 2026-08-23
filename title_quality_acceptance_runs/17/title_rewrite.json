@@ -1,0 +1,19 @@
+{
+  "schema_version": 1,
+  "original_title": "We Bought the Cheapest House on the Street - Big Mistake?",
+  "rewritten_title": "Buying the Cheapest House on the Street - Was It Really a Mistake?",
+  "safe_rewritten_title": "Buying the Cheapest House on the Street - Was It Really a Mistake_",
+  "filename_base": "Buying the Cheapest House on the Street - Was It Really a Mistake_",
+  "status": "APPLIED",
+  "model": "Qwen/Qwen2.5-VL-7B-Instruct-AWQ",
+  "generation_count": 2,
+  "retry_count": 1,
+  "guard_rejections": [
+    "markdown output"
+  ],
+  "model_load_count": 0,
+  "queue_wait_seconds": 1.7999991541728377e-06,
+  "generation_seconds": 42.545202899993456,
+  "total_seconds": 42.548875299995416,
+  "error": null
+}

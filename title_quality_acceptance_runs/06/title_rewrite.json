@@ -1,0 +1,17 @@
+{
+  "schema_version": 1,
+  "original_title": "Can You Really Retire With Only $300,000?",
+  "rewritten_title": "Is $300,000 Enough for Retirement?",
+  "safe_rewritten_title": "Is $300,000 Enough for Retirement_",
+  "filename_base": "Is $300,000 Enough for Retirement_",
+  "status": "APPLIED",
+  "model": "Qwen/Qwen2.5-VL-7B-Instruct-AWQ",
+  "generation_count": 1,
+  "retry_count": 0,
+  "guard_rejections": [],
+  "model_load_count": 0,
+  "queue_wait_seconds": 1.0000003385357559e-06,
+  "generation_seconds": 19.593225199998415,
+  "total_seconds": 19.595469499996398,
+  "error": null
+}

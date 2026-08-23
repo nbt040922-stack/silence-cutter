@@ -1,0 +1,17 @@
+{
+  "schema_version": 1,
+  "original_title": "Is Colombia Still Affordable for Expats in 2026?",
+  "rewritten_title": "Affordability of Colombia for Expats in 2026",
+  "safe_rewritten_title": "Affordability of Colombia for Expats in 2026",
+  "filename_base": "Affordability of Colombia for Expats in 2026",
+  "status": "APPLIED",
+  "model": "Qwen/Qwen2.5-VL-7B-Instruct-AWQ",
+  "generation_count": 1,
+  "retry_count": 0,
+  "guard_rejections": [],
+  "model_load_count": 0,
+  "queue_wait_seconds": 8.999995770864189e-07,
+  "generation_seconds": 21.260927299998002,
+  "total_seconds": 21.263075700000627,
+  "error": null
+}

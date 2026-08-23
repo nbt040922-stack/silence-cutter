@@ -54,11 +54,40 @@ class JobRunnerTests(unittest.TestCase):
 
         for _ in range(3):
             job_runner.process_next_job(downloader=download, pipeline=pipeline)
-
         reloaded = job_runner.list_jobs()
         self.assertEqual([job["status"] for job in reloaded], ["DONE"] * 3)
         self.assertEqual([item[1] for item in order[::2]], [job["url"] for job in jobs])
         self.assertTrue(all(Path(job["output_path"]).is_file() for job in reloaded))
+
+    def test_process_next_job_never_claims_manual_lan_job(self):
+        job = job_runner.create_jobs(["https://example.com/manual"])[0]
+        job["origin"] = "MANUAL_LAN"
+        job_runner._write_job(job)
+
+        def unexpected(*_args, **_kwargs):
+            raise AssertionError("MANUAL_LAN entered the desktop worker")
+
+        self.assertIsNone(job_runner.process_next_job(downloader=unexpected))
+        self.assertEqual(job_runner._read_job(job_runner._job_path(job["id"]))["status"], "QUEUED")
+
+    def test_manual_lan_job_is_not_reconciled_from_unrelated_bridge_report(self):
+        job = job_runner.create_jobs(["https://example.com/manual-reconcile"])[0]
+        source = job_runner._job_path(job["id"]).parent / "source.mp4"
+        source.write_bytes(b"source")
+        job.update(origin="MANUAL_LAN", status="PROCESSING", source_path=str(source))
+        job_runner._write_job(job)
+        reports = Path(job_runner.load_settings()["workspace_folder"]) / "contentops-process-reports" / "other"
+        reports.mkdir(parents=True)
+        output = reports / "PART_1.mp4"
+        output.write_bytes(b"output")
+        (reports / "job.json").write_text(json.dumps({
+            "id": "other", "status": "DONE", "source_path": str(source),
+            "formatted_outputs": [{"path": str(output)}],
+        }), encoding="utf-8")
+
+        listed = job_runner.list_jobs()[0]
+
+        self.assertEqual(listed["status"], "PROCESSING")
 
     def test_active_jobs_recover_as_interrupted_and_can_retry(self):
         job = job_runner.create_jobs(["https://example.com/video"])[0]
@@ -71,12 +100,118 @@ class JobRunnerTests(unittest.TestCase):
         self.assertEqual(interrupted["status"], "INTERRUPTED")
         self.assertEqual(job_runner.retry_job(job["id"])["status"], "QUEUED")
 
+    def test_orphaned_active_job_is_failed_after_watchdog_timeout(self):
+        job = job_runner.create_jobs(["https://example.com/orphan"])[0]
+        job.update(status="ANALYZING", stage="analyzing", pid=None)
+        job_runner._write_job(job)
+
+        path = job_runner._job_path(job["id"])
+        old = path.stat().st_mtime - 61
+        os.utime(path, (old, old))
+
+        result = job_runner.reconcile_orphaned_jobs(now=old + 100, timeout_seconds=30)
+
+        self.assertEqual(result, 1)
+        failed = job_runner.list_jobs()[0]
+        self.assertEqual(failed["status"], "FAILED")
+        self.assertEqual(failed["stage"], "worker_crashed")
+        self.assertIn("worker stopped unexpectedly", failed["error"].lower())
+
+    def test_orphaned_active_job_is_not_failed_during_grace_period(self):
+        job = job_runner.create_jobs(["https://example.com/orphan"])[0]
+        job.update(status="ANALYZING", stage="analyzing", pid=None)
+        job_runner._write_job(job)
+
+        path = job_runner._job_path(job["id"])
+        now = path.stat().st_mtime + 5
+
+        self.assertEqual(
+            job_runner.reconcile_orphaned_jobs(now=now, timeout_seconds=30), 0
+        )
+        self.assertEqual(job_runner.list_jobs()[0]["status"], "ANALYZING")
+
+    def test_worker_reaps_failed_task_without_crashing_supervisor(self):
+        failed = Future()
+        failed.set_exception(RuntimeError("child failed"))
+        self.assertIsNone(job_runner.DownloadManager._reap(failed))
+
+    @patch.object(job_runner, "_format_done_job")
+    def test_formatter_failure_retry_reuses_existing_analysis(self, formatter):
+        job = job_runner.create_jobs(["https://example.com/formatter"])[0]
+        job.update(
+            status="DONE", stage="formatter_failed", formatter_status="FAILED",
+            source_path=str(self.root / "workspace" / "jobs" / job["id"] / "source.mp4"),
+        )
+        job_runner._write_job(job)
+
+        def rerender(path, **_options):
+            stored = job_runner._read_job(path)
+            stored.update(status="DONE", stage="done", formatter_status="DONE", formatter_error=None)
+            job_runner._write_job(stored)
+            return {"formatter_status": "DONE"}
+
+        formatter.side_effect = rerender
+        result = job_runner.retry_job(job["id"])
+
+        formatter.assert_called_once_with(job_runner._job_path(job["id"]), format_anyway=False)
+        self.assertEqual(result["status"], "DONE")
+        self.assertEqual(result["formatter_status"], "DONE")
+
     def test_invalid_url_fails_and_remove_cleans_job(self):
         job = job_runner.create_jobs(["not-a-url"])[0]
         self.assertEqual(job["status"], "FAILED")
         self.assertIn("http", job["error"])
         self.assertEqual(job_runner.remove_job(job["id"]), {"removed": True})
         self.assertEqual(job_runner.list_jobs(), [])
+
+    def test_list_jobs_reconciles_completed_contentops_bridge_job(self):
+        source = self.root / "input" / "source.mp4"
+        source.parent.mkdir(parents=True, exist_ok=True)
+        source.write_bytes(b"source")
+        job = job_runner._create_local_job(
+            source, "fingerprint", 12.0, job_runner.load_settings()
+        )
+        job.update(status="ANALYZING", stage="analyzing", pid=None)
+        job_runner._write_job(job)
+
+        output = self.root / "output" / "PART_1.mp4"
+        output.parent.mkdir(parents=True, exist_ok=True)
+        output.write_bytes(b"rendered")
+        bridge_job = self.root / "workspace" / "contentops-process-reports" / "contentops-process-16" / "job.json"
+        bridge_job.parent.mkdir(parents=True, exist_ok=True)
+        bridge_job.write_text(json.dumps({
+            "id": "contentops-process-16",
+            "status": "DONE",
+            "stage": "done",
+            "source_path": str(source),
+            "output_path": str(output),
+            "output_folder": str(output.parent),
+            "formatter_status": "DONE",
+            "formatted_outputs": [{"index": 1, "path": str(output)}],
+            "formatter_part_count": 1,
+            "finished_at": self.instant(200),
+        }), encoding="utf-8")
+
+        reconciled = job_runner.list_jobs()[0]
+        self.assertEqual(reconciled["status"], "DONE")
+        self.assertEqual(reconciled["formatter_status"], "DONE")
+        self.assertEqual(reconciled["output_path"], str(output))
+        self.assertEqual(reconciled["external_process_id"], "contentops-process-16")
+
+    def test_clear_history_removes_terminal_jobs_and_keeps_active_jobs(self):
+        finished = job_runner.create_jobs(["https://example.com/finished"])[0]
+        active = job_runner.create_jobs(["https://example.com/active"])[0]
+        finished["status"] = "DONE"
+        finished["stage"] = "done"
+        job_runner._write_job(finished)
+        active["status"] = "PROCESSING"
+        active["stage"] = "processing"
+        job_runner._write_job(active)
+
+        result = job_runner.clear_history()
+
+        self.assertEqual(result, {"removed": 1})
+        self.assertEqual([job["id"] for job in job_runner.list_jobs()], [active["id"]])
 
     def test_settings_force_single_concurrent_job(self):
         settings = job_runner.save_settings({

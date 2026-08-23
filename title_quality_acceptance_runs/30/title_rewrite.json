@@ -1,0 +1,19 @@
+{
+  "schema_version": 1,
+  "original_title": "Tôi sống một mình 30 ngày và điều này đã thay đổi tôi",
+  "rewritten_title": "30 Days Alone: How Living Alone Changed My Life",
+  "safe_rewritten_title": "30 Days Alone_ How Living Alone Changed My Life",
+  "filename_base": "30 Days Alone_ How Living Alone Changed My Life",
+  "status": "APPLIED",
+  "model": "Qwen/Qwen2.5-VL-7B-Instruct-AWQ",
+  "generation_count": 2,
+  "retry_count": 1,
+  "guard_rejections": [
+    "markdown output"
+  ],
+  "model_load_count": 0,
+  "queue_wait_seconds": 2.0999941625632346e-06,
+  "generation_seconds": 32.287728399991465,
+  "total_seconds": 32.29192940000212,
+  "error": null
+}

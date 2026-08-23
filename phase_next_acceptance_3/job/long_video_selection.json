@@ -1,0 +1,110 @@
+{
+  "status": "APPLIED",
+  "source_duration": 1448.154,
+  "threshold": 900.0,
+  "part_count": 3,
+  "coarse_chunk_count": 25,
+  "sampled_frame_count": 97,
+  "generation_count": 1,
+  "candidate_count": 6,
+  "ranked_candidates": [
+    {
+      "center": 300.0,
+      "score": 0.9,
+      "topic": "Shopping",
+      "reason": "Shopping"
+    },
+    {
+      "center": 480.0,
+      "score": 0.8,
+      "topic": "Review",
+      "reason": "Review"
+    },
+    {
+      "center": 720.0,
+      "score": 0.7,
+      "topic": "Comparison",
+      "reason": "Comparison"
+    },
+    {
+      "center": 960.0,
+      "score": 0.6,
+      "topic": "Price",
+      "reason": "Price"
+    },
+    {
+      "center": 1140.0,
+      "score": 0.5,
+      "topic": "Conclusion",
+      "reason": "Conclusion"
+    },
+    {
+      "center": 1380.0,
+      "score": 0.4,
+      "topic": "Final",
+      "reason": "Final"
+    }
+  ],
+  "selected_ranges": [
+    {
+      "start": 180.0,
+      "end": 420.0,
+      "duration": 240.0,
+      "score": 0.9,
+      "topic": "Shopping",
+      "reason": "Shopping",
+      "part_index": 1
+    },
+    {
+      "start": 600.0,
+      "end": 840.0,
+      "duration": 240.0,
+      "score": 0.7,
+      "topic": "Comparison",
+      "reason": "Comparison",
+      "part_index": 2
+    },
+    {
+      "start": 840.0,
+      "end": 1080.0,
+      "duration": 240.0,
+      "score": 0.6,
+      "topic": "Price",
+      "reason": "Price",
+      "part_index": 3
+    }
+  ],
+  "rejected_candidates": [
+    {
+      "center": 480.0,
+      "score": 0.8,
+      "topic": "Review",
+      "reason": "Review",
+      "rejection_reason": "not selected by diversity/overlap score"
+    },
+    {
+      "center": 1140.0,
+      "score": 0.5,
+      "topic": "Conclusion",
+      "reason": "Conclusion",
+      "rejection_reason": "not selected by diversity/overlap score"
+    },
+    {
+      "center": 1380.0,
+      "score": 0.4,
+      "topic": "Final",
+      "reason": "Final",
+      "rejection_reason": "not selected by diversity/overlap score"
+    }
+  ],
+  "selected_total_duration": 720.0,
+  "model_load_time": 0.0,
+  "frame_extraction_time": 32.060243299999456,
+  "coarse_time": 59.54797540000027,
+  "ranking_time": 0.00014379999993252568,
+  "refinement_time": 0.09337839999989228,
+  "total_processing_time": 91.89040040000009,
+  "peak_vram_bytes": 0,
+  "qwen_queue_wait": 4.900000021734741e-06,
+  "qwen_generation_time": 59.4671558
+}

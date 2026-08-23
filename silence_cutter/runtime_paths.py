@@ -26,4 +26,11 @@ def find_executable(name: str) -> str | None:
 
 def model_reference(directory: str, remote_reference: str) -> str:
     bundled = bundled_path("models", directory)
-    return str(bundled) if bundled and bundled.is_dir() else remote_reference
+    if bundled and bundled.is_dir():
+        return str(bundled)
+    data_root = os.environ.get("SILENCE_CUTTER_DATA_DIR")
+    if data_root:
+        user_model = Path(data_root).expanduser() / "models" / directory
+        if user_model.is_dir():
+            return str(user_model)
+    return remote_reference

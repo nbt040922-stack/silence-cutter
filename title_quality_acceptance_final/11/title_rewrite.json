@@ -1,0 +1,19 @@
+{
+  "schema_version": 1,
+  "original_title": "What Nobody Warns You About Living in Mexico",
+  "rewritten_title": "Secrets Nobody Tells You About Living in Mexico",
+  "safe_rewritten_title": "Secrets Nobody Tells You About Living in Mexico",
+  "filename_base": "Secrets Nobody Tells You About Living in Mexico",
+  "status": "APPLIED",
+  "model": "Qwen/Qwen2.5-VL-7B-Instruct-AWQ",
+  "generation_count": 2,
+  "retry_count": 1,
+  "guard_rejections": [
+    "markdown output"
+  ],
+  "model_load_count": 0,
+  "queue_wait_seconds": 1.6999983927235007e-06,
+  "generation_seconds": 31.24422429999686,
+  "total_seconds": 31.248604599997634,
+  "error": null
+}

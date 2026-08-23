@@ -1,0 +1,33 @@
+{
+  "version": 1,
+  "models": [
+    {
+      "kind": "qwen",
+      "name": "Qwen2.5-VL-3B-Instruct-AWQ",
+      "required_files": ["config.json", "preprocessor_config.json"],
+      "min_vram_gb": 6,
+      "source": "Qwen/Qwen2.5-VL-3B-Instruct-AWQ",
+      "revision": "main"
+    },
+    {
+      "kind": "qwen",
+      "name": "Qwen2.5-VL-7B-Instruct-AWQ",
+      "required_files": ["config.json", "preprocessor_config.json"],
+      "min_vram_gb": 10,
+      "source": "Qwen/Qwen2.5-VL-7B-Instruct-AWQ",
+      "revision": "main"
+    },
+    {
+      "kind": "silence",
+      "name": "SenseVoiceSmall",
+      "required_files": ["configuration.json"],
+      "source": "iic/SenseVoiceSmall"
+    },
+    {
+      "kind": "silence",
+      "name": "fsmn-vad",
+      "required_files": ["configuration.json"],
+      "source": "iic/speech_fsmn_vad_zh-cn-16k-common-pytorch"
+    }
+  ]
+}

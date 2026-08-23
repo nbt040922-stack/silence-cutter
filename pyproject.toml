@@ -30,7 +30,7 @@ silence-cutter-production = "production.__main__:main"
 tiktok-formatter-plan = "formatter.__main__:main"
 
 [tool.setuptools.packages.find]
-include = ["backend*", "caption_engine*", "enhanced_content_flow*", "formatter*", "long_video_selector*", "production*", "qwen_worker*", "semantic_cleaner*", "silence_cutter*", "timeline_engine*", "speech_detector*"]
+include = ["backend*", "caption_engine*", "enhanced_content_flow*", "formatter*", "installer_setup*", "long_video_selector*", "production*", "qwen_worker*", "semantic_cleaner*", "silence_cutter*", "timeline_engine*", "speech_detector*"]
 
 [tool.setuptools.package-data]
 formatter = ["assets/fonts/*"]

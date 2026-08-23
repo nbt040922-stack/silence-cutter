@@ -9,7 +9,7 @@ from pathlib import Path
 from typing import Any
 
 
-TITLE_REWRITE_PROMPT = """Rewrite this video title into one high-engagement, natural, truthful title in the SAME LANGUAGE. Do not summarize it into a plain topic. First identify its dominant pattern internally (list, question, how-to, warning, personal story, contrarian claim, money, comparison, or reveal), then preserve or improve its strongest reason to click: curiosity, stakes, benefit, surprise, contrast, consequence, open loop, specificity, or personal transformation. Preserve named entities and useful numbers. Refine clickbait, but never invent facts, numbers, results, danger, controversy, urgency, people, or conclusions. Avoid spammy ALL CAPS, emoji, hashtags, markdown, SEO lists, SHOCKING, YOU WON'T BELIEVE, MUST WATCH, and excessive punctuation. Prefer 6-14 words and about 90 characters maximum. Output only valid JSON: {{\"rewritten_title\":\"...\"}}.
+TITLE_REWRITE_PROMPT = """Rewrite this video title into one concise, high-engagement, natural, truthful title in the SAME LANGUAGE. Preserve the core subject, named entities, useful numbers, and strongest reason to click; never invent facts or change the meaning. Do not summarize it into a vague topic. Remove greetings, filler, repeated phrases, decorative brackets, and unnecessary details. Prefer 6-12 words and stay under 60 characters whenever the language allows; Japanese/Chinese/Korean titles should stay under 42 characters. The result must fit a three-line mobile banner. Avoid spammy ALL CAPS, emoji, hashtags, markdown, SEO lists, SHOCKING, YOU WON'T BELIEVE, MUST WATCH, and excessive punctuation. Output only valid JSON: {{\"rewritten_title\":\"...\"}}.
 
 Style calibration:
 - 50 *NEW* Dollar Tree Deals you NEED to buy! -> 50 Dollar Tree Finds Actually Worth Buying
@@ -99,8 +99,9 @@ def _guard_title(original: str, rewritten: str) -> str | None:
     language_error = _language_guard(original, rewritten)
     if language_error:
         return language_error
-    if len(rewritten) > 100:
-        return "title exceeds 100 characters"
+    cjk = bool(re.search(r"[\u3040-\u30ff\u3400-\u9fff\uac00-\ud7af]", original))
+    if len(rewritten) > (42 if cjk else 72):
+        return "title is too long for the mobile banner"
     if "\n" in rewritten or "```" in rewritten or re.search(r"(?:\*\*|__|^\s*#)", rewritten):
         return "title contains markdown or explanation formatting"
     if re.match(r"(?i)^\s*(?:here(?:'s| is)|sure[,!:]|rewritten title|output)\b", rewritten):
@@ -133,6 +134,34 @@ def _guard_title(original: str, rewritten: str) -> str | None:
     return None
 
 
+def _compact_title(title: str) -> str:
+    """Create a deterministic short fallback without changing the title's subject."""
+    value = re.sub(r"\s+", " ", unicodedata.normalize("NFC", str(title))).strip()
+    value = re.sub(r"[【】\[\]{}]", "", value)
+    value = re.sub(r"([!?！？。])\1+", r"\1", value)
+    has_cjk = bool(re.search(r"[\u3040-\u30ff\u3400-\u9fff\uac00-\ud7af]", value))
+    limit = 42 if has_cjk else 72
+    if len(value) <= limit:
+        return value
+    if has_cjk:
+        prefix = value[: limit - 1]
+        boundaries = [prefix.rfind(mark) for mark in "。！？!?、"]
+        boundary = max(boundaries)
+        if boundary >= 18:
+            prefix = prefix[: boundary + 1]
+        return prefix.rstrip(" 　、・:：-—") + "…"
+    words = value.split()
+    compact: list[str] = []
+    length = 0
+    for word in words:
+        added = len(word) if not compact else len(word) + 1
+        if length + added > limit - 1:
+            break
+        compact.append(word)
+        length += added
+    return (" ".join(compact) or value[: limit - 1]).rstrip(" .,!?;:") + "…"
+
+
 def _choose_base(output_dir: Path, title: str, source_id: str | None, part_count: int) -> str:
     base = safe_filename_title(title, fallback_id=source_id)
     if any((output_dir / f"{base}_PART_{index}.mp4").exists()
@@ -150,7 +179,11 @@ def rewrite_title_once(
     if artifact_path.is_file():
         try:
             cached = json.loads(artifact_path.read_text(encoding="utf-8"))
-            if cached.get("filename_base"):
+            cached_title = str(cached.get("rewritten_title") or "")
+            max_cached = 42 if re.search(
+                r"[\u3040-\u30ff\u3400-\u9fff\uac00-\ud7af]", original_title
+            ) else 72
+            if cached.get("filename_base") and cached_title and len(cached_title) <= max_cached:
                 return cached
         except (OSError, ValueError):
             pass
@@ -196,6 +229,8 @@ def rewrite_title_once(
             break
     except Exception as exc:
         error = f"{type(exc).__name__}: {exc}"
+    if status != "APPLIED":
+        rewritten = _compact_title(rewritten)
     safe_rewritten = safe_filename_title(rewritten, fallback_id=source_id)
     filename_base = _choose_base(
         Path(output_dir), safe_rewritten, source_id, part_count,
