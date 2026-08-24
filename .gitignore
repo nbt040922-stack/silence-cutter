@@ -44,3 +44,8 @@ hardware_benchmark_run.log
 /Silence Cutter Local*.exe
 /lightweight_release/
 lan-token
+
+# ContentOps Monitor generated files
+ContentOpsMonitor/**/bin/
+ContentOpsMonitor/**/obj/
+ContentOpsMonitor/publish/

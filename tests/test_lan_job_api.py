@@ -38,6 +38,31 @@ def test_management_ui_is_local_and_token_protected_for_jobs():
     assert "127.0.0.1:8793/open" in UI_HTML
 
 
+def test_youtube_metadata_uses_backend_yt_dlp_command(monkeypatch):
+    import lan_job_api
+
+    class Result:
+        returncode = 0
+        stdout = '{"title":"Real video","uploader":"Real channel","duration":1122,"thumbnail":"https://img.test/thumb.jpg"}'
+        stderr = ""
+
+    monkeypatch.setattr(lan_job_api, "_backend", lambda: type(
+        "Backend", (), {"_yt_dlp_command": staticmethod(lambda: ["yt-dlp"])}
+    )())
+    monkeypatch.setattr(lan_job_api.subprocess, "run", lambda *args, **kwargs: Result())
+
+    result = lan_job_api.fetch_youtube_metadata("https://www.youtube.com/watch?v=abc")
+
+    assert result == {
+        "title": "Real video",
+        "channel": "Real channel",
+        "duration_seconds": 1122,
+        "duration": "18:42",
+        "thumbnail": "https://img.test/thumb.jpg",
+        "url": "https://www.youtube.com/watch?v=abc",
+    }
+
+
 def test_retry_helper_delegates_to_backend(monkeypatch):
     import lan_job_api
 
@@ -70,6 +95,34 @@ def test_remote_submission_persists_submitter_ip(monkeypatch):
     assert result["job_id"] == "job-1"
     assert stored[0]["submitter_ip"] == "192.168.1.20"
     assert stored[0]["origin"] == "MANUAL_LAN"
+
+
+def test_remote_submission_persists_youtube_metadata(monkeypatch):
+    import lan_job_api
+
+    stored = []
+    class Backend:
+        @staticmethod
+        def create_jobs(_urls):
+            return [{"id": "job-meta", "status": "QUEUED", "title": "www.youtube.com", "display_name": "www.youtube.com"}]
+
+        @staticmethod
+        def _write_job(job):
+            stored.append(job)
+
+    monkeypatch.setattr(lan_job_api, "_backend", lambda: Backend)
+    monkeypatch.setattr(lan_job_api, "fetch_youtube_metadata", lambda _url: {
+        "title": "Real video", "channel": "Real channel", "duration_seconds": 1122,
+        "duration": "18:42", "thumbnail": "thumb", "url": "https://youtu.be/abc",
+    })
+
+    result = lan_job_api.create_remote_job({"url": "https://youtu.be/abc"})
+
+    assert result["job_id"] == "job-meta"
+    assert stored[0]["title"] == "Real video"
+    assert stored[0]["display_name"] == "Real video"
+    assert stored[0]["channel_name"] == "Real channel"
+    assert stored[0]["duration"] == 1122
 
 
 def test_repeated_manual_submission_reuses_existing_video_job(monkeypatch):

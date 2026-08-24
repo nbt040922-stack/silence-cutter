@@ -4,6 +4,7 @@ import json
 import os
 import secrets
 import socket
+import subprocess
 import threading
 import time
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
@@ -192,6 +193,41 @@ def _youtube_video_id(url: str) -> str:
     return (parse_qs(urlparse(str(url)).query).get("v") or [""])[0].strip()
 
 
+def fetch_youtube_metadata(url: str) -> dict[str, Any]:
+    """Return preview metadata using the same yt-dlp command as the backend."""
+    backend = _backend()
+    command_factory = getattr(backend, "_yt_dlp_command", None)
+    command = command_factory() if callable(command_factory) else None
+    if not command:
+        raise RuntimeError("yt-dlp is unavailable")
+    result = subprocess.run(
+        [*command, "--dump-single-json", "--no-playlist", "--skip-download", url],
+        capture_output=True, text=True, timeout=20, check=False,
+    )
+    if result.returncode != 0:
+        raise RuntimeError((result.stderr or "metadata lookup failed").strip()[-500:])
+    try:
+        payload = json.loads(result.stdout)
+    except json.JSONDecodeError as error:
+        raise RuntimeError("metadata response was invalid") from error
+    seconds = payload.get("duration")
+    duration_seconds = float(seconds) if isinstance(seconds, (int, float)) else None
+    duration = "--"
+    if duration_seconds is not None:
+        total = max(0, int(round(duration_seconds)))
+        duration = f"{total // 3600:02d}:{(total % 3600) // 60:02d}:{total % 60:02d}" if total >= 3600 else f"{total // 60:02d}:{total % 60:02d}"
+    thumbnails = payload.get("thumbnails") or []
+    thumbnail = payload.get("thumbnail") or (thumbnails[-1].get("url") if thumbnails and isinstance(thumbnails[-1], dict) else None)
+    return {
+        "title": str(payload.get("title") or "YouTube video"),
+        "channel": str(payload.get("uploader") or payload.get("channel") or "YouTube"),
+        "duration_seconds": duration_seconds,
+        "duration": duration,
+        "thumbnail": thumbnail,
+        "url": url,
+    }
+
+
 def create_remote_job(payload: dict[str, Any], *, submitter_ip: str | None = None) -> dict[str, Any]:
     value = validate_submission(payload)
     backend = _backend()
@@ -210,7 +246,19 @@ def create_remote_job(payload: dict[str, Any], *, submitter_ip: str | None = Non
                         "status": existing.get("status"),
                         "deduplicated": True,
                     }
+        metadata = None
+        try:
+            metadata = fetch_youtube_metadata(value["url"])
+        except Exception:
+            # Metadata enriches the record but must not prevent queue submission.
+            metadata = None
         job = backend.create_jobs([value["url"]])[0]
+        if metadata:
+            job.update(
+                title=metadata["title"], display_name=metadata["title"],
+                channel_name=metadata["channel"], duration=metadata["duration_seconds"],
+                thumbnail=metadata.get("thumbnail"),
+            )
     else:
         settings = backend.load_settings()
         source = Path(str(value["source_path"]))
@@ -470,6 +518,16 @@ class _Handler(BaseHTTPRequestHandler):
             return
         if not self._authorized():
             self._reply(401, {"error": "unauthorized"})
+            return
+        if self.path.startswith("/metadata"):
+            url = parse_qs(urlparse(self.path).query).get("url", [""])[0].strip()
+            if not url:
+                self._reply(400, {"error": "url is required"})
+                return
+            try:
+                self._reply(200, fetch_youtube_metadata(url))
+            except Exception as error:
+                self._reply(502, {"error": str(error)})
             return
         if self.path.startswith("/jobs/"):
             try:
