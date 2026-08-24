@@ -413,6 +413,7 @@ class QwenSemanticDetector:
         self, source: Path, duration: float, ranges: list[dict[str, float]],
         cache_root: Path | None = None,
         reusable_frames: list[dict[str, Any]] | None = None,
+        role: str | None = None,
     ) -> dict[str, Any]:
         """Run one semantic generation over selected ranges, preserving source timestamps."""
         started = time.perf_counter()
@@ -473,9 +474,13 @@ class QwenSemanticDetector:
             try:
                 if sheets:
                     fine_started = time.perf_counter()
-                    final_segments = self._classify_with_oom_fallback(
-                        sheets, FINE_PROMPT.format(duration=duration),
-                    )
+                    prompt = FINE_PROMPT.format(duration=duration)
+                    if role:
+                        prompt = (
+                            f"Inspect only the {role} role for this bounded video part. "
+                            "Ignore all other categories.\n" + prompt
+                        )
+                    final_segments = self._classify_with_oom_fallback(sheets, prompt)
                     final_segments = _align_to_visual_transitions(
                         final_segments, coarse_segments, coarse_interval,
                     )

@@ -3,6 +3,7 @@ import time
 import unittest
 
 from qwen_worker.server import QwenWorkerRuntime, QwenWorkerServer
+from qwen_worker.client import _TorchMetrics
 
 
 class FakeDetector:
@@ -83,6 +84,12 @@ class QwenWorkerTests(unittest.TestCase):
         with self.assertRaisesRegex(RuntimeError, "CUDA out of memory"):
             runtime.generate({"task": "semantic", "prompt": "boom", "images": []})
         self.assertEqual(runtime.health()["status"], "READY")
+
+    def test_worker_client_torch_compatibility_exposes_oom_fallback_hooks(self):
+        metrics = _TorchMetrics()
+
+        self.assertTrue(issubclass(metrics.OutOfMemoryError, RuntimeError))
+        self.assertTrue(callable(metrics.cuda.empty_cache))
 
 
 if __name__ == "__main__":

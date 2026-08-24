@@ -14,16 +14,29 @@ def test_discovery_selects_one_unseen_highest_view_video_per_channel(monkeypatch
     monkeypatch.setattr(lan_job_api, "_backend", lambda: type("Backend", (), {"_yt_dlp_command": staticmethod(lambda: ["yt-dlp"]), "list_jobs": staticmethod(lambda: [])})())
     monkeypatch.setattr(lan_job_api.subprocess, "run", lambda *args, **kwargs: type("Result", (), {"returncode": 0, "stdout": "\n".join(json.dumps(row) for row in rows), "stderr": ""})())
     created = []
-    monkeypatch.setattr(lan_job_api, "create_remote_job", lambda payload, **_: created.append(payload["url"]) or {"job_id": "job-high", "status": "QUEUED"})
+    monkeypatch.setattr(lan_job_api, "create_remote_job", lambda payload, **_: created.append(payload.copy()) or {"job_id": "job-high", "status": "QUEUED"})
 
     result = lan_job_api.discover_channel_jobs(
         ["https://www.youtube.com/@channel/videos"],
         now=datetime(2026, 8, 24, tzinfo=timezone.utc),
     )
 
-    assert created == ["https://youtu.be/high"]
+    assert created == [{
+        "url": "https://youtu.be/high", "discovery": "channel_top_view",
+        "channel_name": "A", "display_name": "A",
+    }]
     assert result["created"][0]["video_id"] == "high"
     assert json.loads((tmp_path / "channel-discovery-history.json").read_text())['high']['job_id'] == "job-high"
+
+
+def test_discovery_history_store_is_initialized_when_missing(monkeypatch, tmp_path):
+    import json
+    import lan_job_api
+
+    monkeypatch.setenv("SILENCE_CUTTER_DATA_DIR", str(tmp_path))
+
+    assert lan_job_api._load_discovery_history() == {}
+    assert json.loads((tmp_path / "channel-discovery-history.json").read_text()) == {}
 
 
 def test_channel_scan_uses_fast_flat_playlist_mode(monkeypatch):
@@ -148,6 +161,41 @@ def test_discovery_pauses_between_created_channel_jobs(monkeypatch, tmp_path):
     assert result["total"] == 2
     assert created == ["https://youtu.be/one", "https://youtu.be/two"]
     assert pauses == [90]
+
+
+def test_discovery_persists_each_selected_video_before_next_channel(monkeypatch, tmp_path):
+    from datetime import datetime, timezone
+    import json
+    import lan_job_api
+
+    monkeypatch.setenv("SILENCE_CUTTER_DATA_DIR", str(tmp_path))
+    monkeypatch.setattr(lan_job_api, "_backend", lambda: type("Backend", (), {
+        "list_jobs": staticmethod(lambda: []),
+    })())
+    calls = []
+
+    def fetch(channel_url, **_kwargs):
+        calls.append(channel_url)
+        if "two" in channel_url:
+            raise KeyboardInterrupt()
+        return [{"video_id": "one", "url": "https://youtu.be/one", "title": "One", "view_count": 10, "published_at": "2026-01-01T00:00:00+00:00"}]
+
+    monkeypatch.setattr(lan_job_api, "fetch_channel_candidates", fetch)
+    monkeypatch.setattr(lan_job_api, "create_remote_job", lambda *_args, **_kwargs: {"job_id": "job-one", "status": "QUEUED"})
+
+    try:
+        lan_job_api.discover_channel_jobs(
+            ["https://youtube.com/@one", "https://youtube.com/@two"],
+            now=datetime(2026, 8, 24, tzinfo=timezone.utc),
+            pause_seconds=lambda: 0,
+            sleeper=lambda _: None,
+        )
+    except KeyboardInterrupt:
+        pass
+
+    saved = json.loads((tmp_path / "channel-discovery-history.json").read_text())
+    assert calls == ["https://youtube.com/@one/videos", "https://youtube.com/@two/videos"]
+    assert saved["one"]["job_id"] == "job-one"
 
 
 def test_validate_discovery_submission_requires_bounded_channel_list():
@@ -337,18 +385,26 @@ def test_manual_scheduler_payload_uses_shared_bridge(monkeypatch, tmp_path):
     source.write_bytes(b"video")
     job = {
         "id": "a" * 32, "origin": "MANUAL_LAN", "status": "READY",
-        "source_path": str(source), "title": "Manual video",
+        "source_path": str(source), "title": "www.youtube.com",
+        "display_name": "Original Manual Video",
         "url": "https://www.youtube.com/watch?v=abcdefghijk",
     }
+    output = tmp_path / "out"
     monkeypatch.setattr(lan_job_api, "_backend", lambda: type(
-        "Backend", (), {"load_settings": staticmethod(lambda: {"output_folder": str(tmp_path / "out")})}
+        "Backend", (), {
+            "load_settings": staticmethod(lambda: {"output_folder": str(output)}),
+            "_user_output_folder": staticmethod(
+                lambda root, title, job_id: root / f"{title}_{job_id[:8]}"
+            ),
+        }
     )())
-    (tmp_path / "out").mkdir()
+    output.mkdir()
     payload = lan_job_api._manual_scheduler_payload(job)
     assert payload["origin"] == "MANUAL_LAN"
     assert payload["source_file"] == str(source)
     assert payload["video_id"] == "abcdefghijk"
     assert payload["handoff_id"] == "manual-" + "a" * 32
+    assert payload["output_dir"] == str(output / "Original Manual Video_aaaaaaaa")
 
 
 def test_manual_ready_job_is_submitted_to_shared_scheduler_not_qwen(monkeypatch, tmp_path):

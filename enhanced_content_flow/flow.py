@@ -19,6 +19,7 @@ from long_video_selector.selector import (
     LongVideoSelectorConfig, _duplicate_topic, _form_range,
     enhanced_target_duration, run_long_video_selector,
 )
+from qwen_part_policy import cap_part_range, part_role, should_inspect_with_qwen
 from production.pipeline import ProductionRuntime
 from semantic_cleaner.cleaner import apply_semantic_cleaner
 from semantic_cleaner.qwen import QwenSemanticDetector, QwenWorkerDetector
@@ -52,6 +53,72 @@ def _write(path: Path, value: dict[str, Any]) -> None:
     temporary = path.with_suffix(path.suffix + ".tmp")
     temporary.write_text(json.dumps(value, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
     os.replace(temporary, path)
+
+
+def inspect_qwen_parts(
+    source: Path, duration: float, parts: list[dict[str, Any]], job_dir: Path, *,
+    detector_factory: Callable[[], Any] = QwenWorkerDetector,
+) -> dict[str, Any]:
+    """Inspect only bounded formatter parts, never the complete source timeline."""
+    artifact_path = Path(job_dir) / "qwen_part_inspection.json"
+    if not should_inspect_with_qwen(duration):
+        result = {
+            "status": "QWEN_SKIPPED_SHORT_SOURCE", "source_duration": float(duration),
+            "threshold": 1500.0, "parts": [],
+            "reason": "source_duration_at_or_below_25_minutes",
+        }
+        _write(artifact_path, result)
+        return result
+
+    try:
+        detector = detector_factory()
+    except Exception as exc:
+        result = {
+            "status": "QWEN_SKIPPED_UNAVAILABLE", "source_duration": float(duration),
+            "threshold": 1500.0, "parts": [],
+            "reason": f"{type(exc).__name__}: {exc}",
+        }
+        _write(artifact_path, result)
+        return result
+    inspected: list[dict[str, Any]] = []
+    for part in sorted(parts, key=lambda value: int(value.get("part_index", value.get("index", 0)))):
+        index = int(part.get("part_index", part.get("index", 0)))
+        role = part_role(index)
+        if role is None:
+            continue
+        source_ranges = part.get("source_ranges") or []
+        if not source_ranges:
+            continue
+        source_start = min(float(item["start"]) for item in source_ranges)
+        source_end = max(float(item["end"]) for item in source_ranges)
+        bounded = cap_part_range(source_start, source_end, float(duration))
+        try:
+            detected = detector.detect_ranges(
+                source, float(duration), [bounded], Path(job_dir) / "qwen" / f"part-{index:02d}",
+                role=role,
+            )
+            segments = [
+                segment for segment in detected.get("segments") or []
+                if str(segment.get("type", "")).upper() in {role, "OUTRO" if role == "OUTTRO" else role}
+            ]
+            inspected.append({
+                "part_index": index, "role": role, "source_range": bounded,
+                "status": "INSPECTED", "segments": segments,
+                "generation_count": int(detected.get("generation_count") or 0),
+            })
+        except Exception as exc:
+            inspected.append({
+                "part_index": index, "role": role, "source_range": bounded,
+                "status": "SKIPPED", "segments": [],
+                "reason": f"{type(exc).__name__}: {exc}",
+            })
+    result = {
+        "status": "QWEN_PARTS_INSPECTED", "source_duration": float(duration),
+        "threshold": 1500.0, "parts": inspected,
+        "generation_count": sum(item.get("generation_count", 0) for item in inspected),
+    }
+    _write(artifact_path, result)
+    return result
 
 
 def recover_enhanced_parts(
@@ -116,7 +183,8 @@ def _format_plan(
             "index": part["part_index"], "clean_start": start_cursor,
             "clean_end": cursor, "duration": cursor - start_cursor,
         })
-    title = fit_title(title_text, TITLE_BANNER)
+    rewritten_title = str((rewrite or {}).get("rewritten_title") or title_text)
+    title = fit_title(rewritten_title, TITLE_BANNER)
     label_template = PART_LABELS[title["language"]]
     for part in clean_parts:
         part["label"] = label_template.format(number=part["index"])
@@ -292,7 +360,7 @@ def run_enhanced_content_flow(
             source_id = job_dir.name
         rewrite = rewrite_title_once(
             job_dir, title, output_dir, source_id=source_id, part_count=len(parts),
-            client=semantic_detector,
+            client=semantic_detector, allow_qwen=False,
         )
         plan_path = _format_plan(source, output_dir, title, job_dir, parts, duration, rewrite)
         rendered = renderer(plan_path)

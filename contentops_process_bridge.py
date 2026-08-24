@@ -114,20 +114,10 @@ def _production_part_core(
     enhanced_status = "NOT_REQUESTED"
     enhanced_reason = None
     if enhanced_content_selection:
-        from enhanced_content_flow import (
-            EnhancedFlowError, EnhancedFlowSkipped, run_enhanced_content_flow,
-        )
-
-        try:
-            outputs = run_enhanced_content_flow(source, output_dir, title, job_dir)
-            return outputs
-        except EnhancedFlowSkipped as exc:
-            enhanced_status = "NOT_USABLE"
-            enhanced_reason = str(exc)
-        except EnhancedFlowError as exc:
-            enhanced_status = "ERROR"
-            enhanced_reason = str(exc)
-    from backend.job_runner import _job_path, _pipeline, _run_semantic_stage
+        enhanced_status = "DEFERRED_TO_FORMATTER_QWEN"
+        enhanced_reason = "Qwen inspection is deferred until timestamped formatter parts exist"
+    from backend.job_runner import _apply_qwen_part_policy, _job_path, _pipeline
+    from semantic_cleaner.cleaner import write_skipped_artifact
     from formatter.planner import plan_done_job
     from formatter.renderer import render_format_plan
     from formatter.title_rewrite import rewrite_title_once
@@ -154,10 +144,10 @@ def _production_part_core(
         _pipeline(analysis_job, job_dir, source)
     except Exception as exc:
         raise ProcessingStageError("FALLBACK", exc) from exc
-    try:
-        _run_semantic_stage({}, job_dir, source, report)
-    except Exception as exc:
-        raise ProcessingStageError("SEMANTIC", exc) from exc
+    write_skipped_artifact(
+        job_dir / "semantic_segments.json",
+        reason="deferred_to_bounded_qwen_part_inspection_before_formatter",
+    )
     try:
         source_id = json.loads((job_dir / "request.json").read_text(encoding="utf-8")).get("video_id")
     except (OSError, ValueError):
@@ -165,6 +155,7 @@ def _production_part_core(
     try:
         rewrite = rewrite_title_once(
             job_dir, title, output_dir, source_id=source_id, part_count=3,
+            allow_qwen=False,
         )
     except Exception as exc:
         raise ProcessingStageError("TITLE_REWRITE", exc) from exc
@@ -189,6 +180,10 @@ def _production_part_core(
         raise ProcessingStageError("PLANNER", exc) from exc
     if plan["formatter_status"] != "PLANNED":
         raise RequestError(f"FORMATTER_{plan['formatter_status']}")
+    plan = _apply_qwen_part_policy(plan, job_dir)
+    plan_path.write_text(
+        json.dumps(plan, ensure_ascii=False, indent=2) + "\n", encoding="utf-8",
+    )
     try:
         result = render_format_plan(plan_path)
     except Exception as exc:

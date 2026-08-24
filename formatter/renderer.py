@@ -128,28 +128,38 @@ def _run_ffmpeg_progress(
 ) -> None:
     process = subprocess.Popen(
         command, stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
-        text=True, encoding="utf-8", errors="replace", bufsize=1,
+        stdin=subprocess.DEVNULL, text=True, encoding="utf-8", errors="replace", bufsize=1,
     )
     fields: dict[str, str] = {}
     output: list[str] = []
     assert process.stdout is not None
-    for raw in process.stdout:
-        line = raw.strip()
-        output.append(line)
-        if "=" not in line:
-            continue
-        key, value = line.split("=", 1)
-        if key == "progress":
-            processed = _progress_seconds(fields)
-            if processed is not None:
-                on_progress(processed)
-            fields.clear()
-        else:
-            fields[key] = value
-    returncode = process.wait()
-    if returncode:
-        detail = "\n".join(output[-80:]).strip() or f"exit code {returncode}"
-        raise MediaProcessError(f"{operation} failed: {detail}")
+    try:
+        for raw in process.stdout:
+            line = raw.strip()
+            output.append(line)
+            if "=" not in line:
+                continue
+            key, value = line.split("=", 1)
+            if key == "progress":
+                processed = _progress_seconds(fields)
+                if processed is not None:
+                    on_progress(processed)
+                fields.clear()
+            else:
+                fields[key] = value
+        returncode = process.wait()
+        if returncode:
+            detail = "\n".join(output[-80:]).strip() or f"exit code {returncode}"
+            raise MediaProcessError(f"{operation} failed: {detail}")
+    finally:
+        if process.poll() is None:
+            process.terminate()
+            try:
+                process.wait(timeout=5)
+            except subprocess.TimeoutExpired:
+                process.kill()
+                process.wait()
+        process.stdout.close()
 
 
 def _write_json(path: Path, value: dict[str, Any]) -> None:

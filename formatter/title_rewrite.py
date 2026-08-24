@@ -195,6 +195,7 @@ def _choose_base(output_dir: Path, title: str, source_id: str | None, part_count
 def rewrite_title_once(
     job_dir: str | Path, original_title: str, output_dir: str | Path, *,
     source_id: str | None = None, part_count: int = 3, client: Any | None = None,
+    allow_qwen: bool = True,
 ) -> dict[str, Any]:
     artifact_path = Path(job_dir) / "title_rewrite.json"
     if artifact_path.is_file():
@@ -218,6 +219,8 @@ def rewrite_title_once(
     guard_rejections: list[str] = []
     status, rewritten, model, error = "FALLBACK", original_title, None, None
     try:
+        if not allow_qwen:
+            raise RuntimeError("Qwen title rewrite disabled for safe per-part pipeline")
         if client is None:
             from qwen_worker.client import QwenWorkerClient
             request_timeout = float(os.getenv("TITLE_REWRITE_TIMEOUT", "30"))

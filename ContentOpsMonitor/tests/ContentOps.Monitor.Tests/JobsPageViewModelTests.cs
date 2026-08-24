@@ -48,6 +48,47 @@ public sealed class JobsPageViewModelTests
     }
 
     [Fact]
+    public void HistoryActionIsVisibleOnlyOnAllJobsView()
+    {
+        var page = new JobsPageViewModel(usePreviewData: false);
+
+        page.ApplyNavigationFilter("Tất cả");
+        Assert.True(page.IsAllJobsView);
+
+        page.ApplyNavigationFilter("Đang chạy");
+        Assert.False(page.IsAllJobsView);
+    }
+
+    [Fact]
+    public void DashboardChannelsCardReservesDedicatedPaginationRow()
+    {
+        var current = new DirectoryInfo(AppContext.BaseDirectory);
+        while (current is not null && !File.Exists(Path.Combine(current.FullName, "ContentOpsMonitor", "src", "ContentOps.Monitor", "MainWindow.xaml")))
+            current = current.Parent;
+
+        Assert.NotNull(current);
+        var xaml = File.ReadAllText(Path.Combine(current!.FullName, "ContentOpsMonitor", "src", "ContentOps.Monitor", "MainWindow.xaml"));
+        var marker = xaml.IndexOf("<TextBlock Text=\"Kênh theo dõi\"", StringComparison.Ordinal);
+        Assert.True(marker >= 0);
+        var rowsStart = xaml.LastIndexOf("<Grid.RowDefinitions>", marker, StringComparison.Ordinal);
+        var rowsEnd = xaml.IndexOf("</Grid.RowDefinitions>", rowsStart, StringComparison.Ordinal);
+        Assert.True(rowsStart >= 0 && rowsEnd > rowsStart);
+        Assert.Equal(4, xaml[rowsStart..rowsEnd].Split("<RowDefinition", StringSplitOptions.None).Length - 1);
+    }
+
+    [Fact]
+    public void JobsPageHistoryButtonBindsVisibilityToItsPageViewModel()
+    {
+        var current = new DirectoryInfo(AppContext.BaseDirectory);
+        while (current is not null && !File.Exists(Path.Combine(current.FullName, "ContentOpsMonitor", "src", "ContentOps.Monitor", "Views", "JobsPage.xaml")))
+            current = current.Parent;
+
+        Assert.NotNull(current);
+        var xaml = File.ReadAllText(Path.Combine(current!.FullName, "ContentOpsMonitor", "src", "ContentOps.Monitor", "Views", "JobsPage.xaml"));
+        Assert.Contains("Binding=\"{Binding IsAllJobsView}\"", xaml);
+    }
+
+    [Fact]
     public void SearchAndSelectionUpdateTheDetailPanel()
     {
         var page = new JobsPageViewModel(usePreviewData: false);

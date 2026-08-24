@@ -20,8 +20,22 @@ class _CudaMetrics:
     def max_memory_allocated(self) -> int:
         return 0
 
+    def memory_allocated(self) -> int:
+        return 0
+
+    def memory_reserved(self) -> int:
+        return 0
+
+    def empty_cache(self) -> None:
+        return None
+
+
+class _RemoteOutOfMemoryError(RuntimeError):
+    """Compatibility exception for the detector's local OOM fallback path."""
+
 
 class _TorchMetrics:
+    OutOfMemoryError = _RemoteOutOfMemoryError
     cuda = _CudaMetrics()
 
 

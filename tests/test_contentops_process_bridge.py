@@ -194,7 +194,7 @@ def test_production_core_reuses_existing_planner_and_renderer(tmp_path, media):
     assert result == parts
     assert len(process.call_args.args[0]["id"]) == 32
     assert process.call_args.args[2] == source
-    semantic.assert_called_once_with({}, job_dir, source, job_dir / "pipeline_report.json")
+    semantic.assert_not_called()
     assert plan.call_count == render.call_count == 1
     job = json.loads((job_dir / "job.json").read_text(encoding="utf-8"))
     assert job["output_folder"] == str(output)
@@ -225,13 +225,13 @@ def test_enhanced_failure_falls_open_to_normal_core(tmp_path, media):
             source, output, "Video title", job_dir, enhanced_content_selection=True,
         )
     assert result == parts
-    enhanced.assert_called_once()
+    enhanced.assert_not_called()
     job = json.loads((job_dir / "job.json").read_text(encoding="utf-8"))
-    assert job["enhanced_selection_status"] == "NOT_USABLE"
+    assert job["enhanced_selection_status"] == "DEFERRED_TO_FORMATTER_QWEN"
     assert job["effective_processing_mode"] == "NORMAL"
-    assert job["enhanced_fallback_reason"] == "no three parts"
+    assert "timestamped formatter parts" in job["enhanced_fallback_reason"]
     assert canonical_job.is_file()
-    semantic.assert_called_once()
+    semantic.assert_not_called()
 
 
 def test_enhanced_infrastructure_error_falls_open_to_normal_core(tmp_path, media):
@@ -255,10 +255,10 @@ def test_enhanced_infrastructure_error_falls_open_to_normal_core(tmp_path, media
         )
     assert result == parts
     job = json.loads((job_dir / "job.json").read_text(encoding="utf-8"))
-    assert job["enhanced_selection_status"] == "ERROR"
+    assert job["enhanced_selection_status"] == "DEFERRED_TO_FORMATTER_QWEN"
     assert job["effective_processing_mode"] == "NORMAL"
-    assert job["enhanced_fallback_reason"] == "qwen timeout"
-    semantic.assert_called_once()
+    assert "timestamped formatter parts" in job["enhanced_fallback_reason"]
+    semantic.assert_not_called()
 
 
 def test_unexpected_enhanced_error_is_not_silently_fallback(tmp_path, media):

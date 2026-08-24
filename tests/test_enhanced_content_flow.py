@@ -4,7 +4,10 @@ import unittest
 from pathlib import Path
 from unittest.mock import patch
 
-from enhanced_content_flow.flow import EnhancedFlowSkipped, _format_plan, recover_enhanced_parts, recover_three_parts
+from enhanced_content_flow.flow import (
+    EnhancedFlowSkipped, _format_plan, inspect_qwen_parts,
+    recover_enhanced_parts, recover_three_parts,
+)
 from formatter.renderer import build_render_jobs
 
 
@@ -18,6 +21,49 @@ def candidates():
 
 
 class EnhancedContentFlowTests(unittest.TestCase):
+    def test_short_source_does_not_create_qwen_detector(self):
+        factory = lambda: (_ for _ in ()).throw(AssertionError("Qwen must not load"))
+        result = inspect_qwen_parts(
+            Path("source.mp4"), 1500.0,
+            [{"part_index": 1, "source_ranges": [{"start": 0.0, "end": 500.0}]}],
+            Path("job"), detector_factory=factory,
+        )
+        self.assertEqual(result["status"], "QWEN_SKIPPED_SHORT_SOURCE")
+
+    def test_long_source_checks_only_part_roles_and_caps_long_part(self):
+        class Detector:
+            def __init__(self):
+                self.calls = []
+
+            def detect_ranges(self, _source, _duration, ranges, _cache, **_options):
+                self.calls.append(ranges)
+                return {"segments": [], "generation_count": 1}
+
+        detector = Detector()
+        result = inspect_qwen_parts(
+            Path("source.mp4"), 1800.0,
+            [
+                {"part_index": 1, "source_ranges": [{"start": 0.0, "end": 720.0}]},
+                {"part_index": 2, "source_ranges": [{"start": 720.0, "end": 900.0}]},
+                {"part_index": 3, "source_ranges": [{"start": 900.0, "end": 1200.0}]},
+                {"part_index": 4, "source_ranges": [{"start": 1200.0, "end": 1300.0}]},
+            ],
+            Path("job"), detector_factory=lambda: detector,
+        )
+        self.assertEqual(result["status"], "QWEN_PARTS_INSPECTED")
+        self.assertEqual([item["role"] for item in result["parts"]], ["INTRO", "AD", "OUTTRO"])
+        self.assertEqual(detector.calls[0], [{"start": 0.0, "end": 480.0}])
+
+    def test_qwen_unavailable_preserves_timestamp_plan(self):
+        result = inspect_qwen_parts(
+            Path("source.mp4"), 1800.0,
+            [{"part_index": 1, "source_ranges": [{"start": 0.0, "end": 400.0}]}],
+            Path("job"),
+            detector_factory=lambda: (_ for _ in ()).throw(RuntimeError("worker unavailable")),
+        )
+        self.assertEqual(result["status"], "QWEN_SKIPPED_UNAVAILABLE")
+        self.assertIn("worker unavailable", result["reason"])
+
     @patch("enhanced_content_flow.flow.probe_media", return_value={"duration": 1200})
     def test_unusable_selection_is_classified_without_formatting(self, _probe):
         from enhanced_content_flow.flow import run_enhanced_content_flow
@@ -113,6 +159,25 @@ class EnhancedContentFlowTests(unittest.TestCase):
         self.assertEqual(plan["part_count"], 2)
         self.assertEqual(len(plan["parts"]), 2)
         self.assertEqual(len(jobs), 2)
+
+    @patch("enhanced_content_flow.flow.probe_video_geometry", return_value=(1920, 1080))
+    def test_enhanced_plan_uses_rewritten_title_for_banner(self, _probe):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            source = root / "source.mp4"
+            source.write_bytes(b"source")
+            parts = [
+                {"part_index": 1, "final_keep": [{"start": 100, "end": 280}], "final_duration": 180},
+                {"part_index": 2, "final_keep": [{"start": 500, "end": 680}], "final_duration": 180},
+            ]
+            plan_path = _format_plan(
+                source, root / "out", "Tiêu đề gốc", root, parts, 1000,
+                {"rewritten_title": "Tiêu đề mới", "filename_base": "Tieu de moi", "status": "APPLIED"},
+            )
+            plan = json.loads(plan_path.read_text(encoding="utf-8"))
+        self.assertEqual(plan["original_title"], "Tiêu đề gốc")
+        self.assertEqual(plan["rewritten_title"], "Tiêu đề mới")
+        self.assertEqual(plan["title"]["source_title"], "Tiêu đề mới")
 
     @patch("enhanced_content_flow.flow.probe_media", return_value={"duration": 1200})
     @patch("enhanced_content_flow.flow._format_plan", return_value=Path("format_plan.json"))

@@ -14,7 +14,7 @@ from PIL import Image
 from formatter.planner import build_layout, center_crop_geometry, fit_title
 from formatter.preview import render_overlay
 from formatter.renderer import (
-    FormatterProgress, _command, _progress_seconds, _select_cuda_decoder, build_render_jobs,
+    FormatterProgress, _command, _progress_seconds, _run_ffmpeg_progress, _select_cuda_decoder, build_render_jobs,
     map_clean_range_to_source, render_format_plan,
 )
 from silence_cutter.audio import MediaProcessError
@@ -427,6 +427,79 @@ class FormatterProgressTests(unittest.TestCase):
         self.assertEqual(_progress_seconds({"out_time_us": "2500000"}), 2.5)
         self.assertEqual(_progress_seconds({"out_time_ms": "3000000"}), 3.0)
         self.assertEqual(_progress_seconds({"out_time": "00:01:02.500000"}), 62.5)
+
+    def test_ffmpeg_progress_flushes_end_and_releases_stdout(self):
+        class FakeStdout:
+            def __init__(self):
+                self.closed_by_runner = False
+
+            def __iter__(self):
+                return iter(["out_time_ms=1000000\n", "progress=continue\n", "out_time_ms=3000000\n", "progress=end\n"])
+
+            def close(self):
+                self.closed_by_runner = True
+
+        class FakeProcess:
+            def __init__(self):
+                self.stdout = FakeStdout()
+                self.returncode = 0
+                self.wait_calls = 0
+
+            def wait(self, *args, **kwargs):
+                self.wait_calls += 1
+                return self.returncode
+
+            def poll(self):
+                return self.returncode
+
+        process = FakeProcess()
+        progress = []
+        with patch("formatter.renderer.subprocess.Popen", return_value=process):
+            _run_ffmpeg_progress(["ffmpeg"], "render", progress.append)
+
+        self.assertEqual(progress, [1.0, 3.0])
+        self.assertTrue(process.stdout.closed_by_runner)
+        self.assertEqual(process.wait_calls, 1)
+
+    def test_ffmpeg_progress_terminates_runtime_when_callback_fails(self):
+        class FakeStdout:
+            def __iter__(self):
+                return iter(["out_time_ms=1000000\n", "progress=end\n"])
+
+            def close(self):
+                self.closed_by_runner = True
+
+        class FakeProcess:
+            def __init__(self):
+                self.stdout = FakeStdout()
+                self.returncode = None
+                self.terminated = False
+                self.killed = False
+                self.wait_calls = 0
+
+            def wait(self, *args, **kwargs):
+                self.wait_calls += 1
+                if self.terminated or self.killed:
+                    self.returncode = 0
+                return self.returncode
+
+            def poll(self):
+                return self.returncode
+
+            def terminate(self):
+                self.terminated = True
+
+            def kill(self):
+                self.killed = True
+
+        process = FakeProcess()
+        with patch("formatter.renderer.subprocess.Popen", return_value=process):
+            with self.assertRaises(RuntimeError):
+                _run_ffmpeg_progress(["ffmpeg"], "render", lambda _: (_ for _ in ()).throw(RuntimeError("stop")))
+
+        self.assertTrue(process.terminated or process.killed)
+        self.assertTrue(process.stdout.closed_by_runner)
+        self.assertGreaterEqual(process.wait_calls, 1)
 
     def test_eta_progress_supports_two_parts(self):
         now = 0.0

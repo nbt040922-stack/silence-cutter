@@ -234,6 +234,10 @@ def _load_discovery_history() -> dict[str, dict[str, Any]]:
     path = _discovery_history_path()
     try:
         payload = json.loads(path.read_text(encoding="utf-8"))
+    except FileNotFoundError:
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text("{}\n", encoding="utf-8")
+        return {}
     except (OSError, ValueError):
         return {}
     return payload if isinstance(payload, dict) else {}
@@ -367,10 +371,15 @@ def discover_channel_jobs(
                 result["skipped"].append({"channel_url": channel_url, "reason": reason})
                 continue
             selected = max(candidates, key=lambda item: (item.get("view_count", 0), item.get("published_at") or "", item["video_id"]))
-            submitted = create_remote_job({"url": selected["url"], "discovery": "channel_top_view"})
+            submitted = create_remote_job({
+                "url": selected["url"], "discovery": "channel_top_view",
+                "channel_name": selected.get("channel") or "YouTube",
+                "display_name": selected.get("channel") or "YouTube",
+            })
             selected = {**selected, "job_id": submitted["job_id"], "status": submitted.get("status"), "selected_at": until.isoformat()}
             history[selected["video_id"]] = selected
             used_ids.add(selected["video_id"])
+            _save_discovery_history(history)
             result["created"].append(selected)
             result["total"] += 1
             if index < len(unique_channels) - 1:
@@ -443,11 +452,16 @@ def create_remote_job(payload: dict[str, Any], *, submitter_ip: str | None = Non
             metadata = None
         job = backend.create_jobs([value["url"]])[0]
         if metadata:
+            discovery_name = str(payload.get("display_name") or metadata["channel"]).strip()
+            display_name = discovery_name if payload.get("discovery") else metadata["title"]
             job.update(
-                title=metadata["title"], display_name=metadata["title"],
+                title=metadata["title"], display_name=display_name,
                 channel_name=metadata["channel"], duration=metadata["duration_seconds"],
                 thumbnail=metadata.get("thumbnail"),
             )
+        elif payload.get("discovery") and payload.get("display_name"):
+            job["display_name"] = str(payload["display_name"]).strip()
+            job["channel_name"] = str(payload.get("channel_name") or payload["display_name"]).strip()
     else:
         settings = backend.load_settings()
         source = Path(str(value["source_path"]))
@@ -473,6 +487,7 @@ def create_remote_job(payload: dict[str, Any], *, submitter_ip: str | None = Non
 
 
 def _manual_scheduler_payload(job: dict[str, Any]) -> dict[str, Any]:
+    backend = _backend()
     source = Path(str(job.get("source_path") or "")).expanduser().resolve()
     if not source.is_file():
         raise ValueError("manual source is not finalized")
@@ -480,8 +495,15 @@ def _manual_scheduler_payload(job: dict[str, Any]) -> dict[str, Any]:
     video_id = (parse_qs(urlparse(url).query).get("v") or [""])[0]
     if len(video_id) != 11:
         raise ValueError("manual URL missing video id")
-    settings = _backend().load_settings()
-    output_dir = Path(str(settings["output_folder"])).expanduser().resolve()
+    settings = backend.load_settings()
+    output_root = Path(str(settings["output_folder"])).expanduser().resolve()
+    display_name = str(job.get("display_name") or job.get("title") or video_id).strip()
+    folder_factory = getattr(backend, "_user_output_folder", None)
+    output_dir = (
+        folder_factory(output_root, display_name, str(job["id"]))
+        if callable(folder_factory)
+        else output_root / display_name
+    )
     output_dir.mkdir(parents=True, exist_ok=True)
     return {
         "handoff_id": f"manual-{job['id']}", "origin": "MANUAL_LAN",

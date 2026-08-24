@@ -58,6 +58,7 @@ public sealed class JobsPageViewModel : ViewModelBase
     public bool IsPreviewData { get; private set; }
     public bool IsRunningView => _statusViewKind == "Running";
     public bool IsStatusView => _statusViewKind.Length > 0;
+    public bool IsAllJobsView => !IsStatusView && _statusFilter == "Tất cả";
     public string PageTitle => _statusViewKind switch
     {
         "Running" => "Đang chạy (Running Jobs)",
@@ -137,6 +138,7 @@ public sealed class JobsPageViewModel : ViewModelBase
         }
         OnPropertyChanged(nameof(StatusFilter));
         OnPropertyChanged(nameof(TypeFilter));
+        OnPropertyChanged(nameof(IsAllJobsView));
         ResetAndRebuild();
     }
 
@@ -160,6 +162,7 @@ public sealed class JobsPageViewModel : ViewModelBase
         }
         OnPropertyChanged(nameof(IsRunningView));
         OnPropertyChanged(nameof(IsStatusView));
+        OnPropertyChanged(nameof(IsAllJobsView));
         OnPropertyChanged(nameof(PageTitle));
         OnPropertyChanged(nameof(PageSubtitle));
         OnPropertyChanged(nameof(MetricOneTitle)); OnPropertyChanged(nameof(MetricOneGlyph)); OnPropertyChanged(nameof(MetricOneBackground)); OnPropertyChanged(nameof(MetricOneForeground)); OnPropertyChanged(nameof(MetricOneValue)); OnPropertyChanged(nameof(MetricOneCaption));

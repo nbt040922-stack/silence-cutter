@@ -1536,6 +1536,10 @@ def _format_done_job(job_file: Path, *, format_anyway: bool = False) -> dict[str
             format_anyway=format_anyway,
         )
         if plan["formatter_status"] == "PLANNED":
+            plan = _apply_qwen_part_policy(plan, job_file.parent)
+            plan_path.write_text(
+                json.dumps(plan, ensure_ascii=False, indent=2) + "\n", encoding="utf-8",
+            )
             plan = render_format_plan(plan_path)
             job = _read_job(job_file)
             job.update(
@@ -1566,6 +1570,72 @@ def _format_done_job(job_file: Path, *, format_anyway: bool = False) -> dict[str
         }
 
 
+def _apply_qwen_part_policy(plan: dict[str, Any], job_dir: Path) -> dict[str, Any]:
+    """Inspect bounded formatter parts before FFmpeg and rebuild their mapping."""
+    if not plan.get("direct_source_render"):
+        plan["qwen_part_inspection"] = {
+            "status": "QWEN_SKIPPED_NON_DIRECT_RENDER",
+            "reason": "formatter source is already rendered",
+        }
+        return plan
+    source = Path(str(plan.get("source_video_path") or ""))
+    duration = float(plan.get("input_duration") or 0.0)
+    from formatter.renderer import map_clean_range_to_source
+    from enhanced_content_flow.flow import inspect_qwen_parts
+    from qwen_part_policy import cap_source_segments, subtract_source_ranges
+
+    parts = []
+    for part in plan.get("parts") or []:
+        source_ranges = map_clean_range_to_source(
+            float(part["clean_start"]), float(part["clean_end"]),
+            plan.get("render_segments") or [],
+        )
+        parts.append(part | {"source_ranges": source_ranges})
+    inspection = inspect_qwen_parts(source, duration, parts, job_dir)
+    plan["qwen_part_inspection"] = inspection
+    if inspection.get("status") != "QWEN_PARTS_INSPECTED":
+        return plan
+
+    by_index = {int(item["part_index"]): item for item in inspection.get("parts") or []}
+    cursor = 0.0
+    mapping: list[dict[str, float]] = []
+    rebuilt: list[dict[str, Any]] = []
+    for part in parts:
+        index = int(part["index"])
+        source_ranges = list(part["source_ranges"])
+        inspected = by_index.get(index) or {}
+        removals = [
+            {"start": float(item["start"]), "end": float(item["end"])}
+            for item in inspected.get("segments") or []
+            if float(item.get("end", 0)) > float(item.get("start", 0))
+        ]
+        filtered = subtract_source_ranges(source_ranges, removals)
+        original_duration = sum(item["end"] - item["start"] for item in source_ranges)
+        if original_duration > 600.0:
+            filtered = cap_source_segments(filtered)
+        if not filtered:
+            filtered = cap_source_segments(source_ranges) if original_duration > 600.0 else source_ranges
+        part_duration = sum(item["end"] - item["start"] for item in filtered)
+        if part_duration <= 0:
+            continue
+        for segment in filtered:
+            length = segment["end"] - segment["start"]
+            mapping.append({
+                "output_start": cursor, "output_end": cursor + length,
+                "source_start": segment["start"], "source_end": segment["end"],
+            })
+            cursor += length
+        rebuilt.append(part | {
+            "clean_start": cursor - part_duration, "clean_end": cursor,
+            "duration": part_duration,
+        })
+    if len(rebuilt) == len(parts):
+        plan["parts"] = rebuilt
+        plan["render_segments"] = mapping
+        plan["clean_video_duration"] = cursor
+    return plan
+
+
 def _process_ready_job(
     job: dict[str, Any],
     *, pipeline: Callable[[dict[str, Any], Path, Path], tuple[Path | None, Path]] = _pipeline,
@@ -1585,18 +1655,23 @@ def _process_ready_job(
         )
         _write_job(job, settings)
         _log(job_dir, "Production pipeline started")
-        long_selection = _run_long_video_stage(job, job_dir, source)
+        long_selection = {
+            "status": "DEFERRED_TO_FORMATTER_QWEN",
+            "threshold": 1500.0,
+            "selected_ranges": [],
+            "reason": "part timestamps are finalized by formatter before bounded Qwen inspection",
+        }
         rendered, report = pipeline(job, job_dir, source)
-        semantic = _run_semantic_stage(job, job_dir, source, report)
-        brand_scan = {"status": "NOT_RUN"}
-        if pipeline is _pipeline:
-            brand_scan = _run_brand_scan_stage(job, job_dir, source, report)
-            if brand_scan.get("status") == "BRAND_SCAN_INCOMPLETE":
-                error = brand_scan.get("reason") or "brand/ad scan incomplete"
-                job.update(status="FAILED", stage="brand_scan", error=error, finished_at=_now(), pid=None)
-                _write_job(job, settings)
-                _log(job_dir, f"Brand/ad scan incomplete: {error}")
-                return {"status": "BRAND_SCAN_INCOMPLETE", "error": error, "report_path": str(report)}
+        from semantic_cleaner.cleaner import write_skipped_artifact
+        semantic = write_skipped_artifact(
+            job_dir / "semantic_segments.json",
+            reason="deferred_to_bounded_qwen_part_inspection_before_formatter",
+        )
+        brand_scan = {
+            "status": "DEFERRED_TO_QWEN_PART_INSPECTION",
+            "removed_duration": 0.0,
+        }
+        _atomic_json(job_dir / "brand_ad_scan.json", brand_scan)
         analysis_time = time.perf_counter() - analysis_wall_started
         report_data = json.loads(report.read_text(encoding="utf-8"))
         clean_duration = report_data.get("expected_output_duration")
@@ -1610,6 +1685,7 @@ def _process_ready_job(
             job_dir, str(job["title"]), output_folder,
             source_id=str(job.get("video_id") or job["id"]),
             part_count=2 if float(clean_duration or 0) < 600 else 3,
+            allow_qwen=False,
         )
         report_data.update(
             original_title=str(job["title"]),

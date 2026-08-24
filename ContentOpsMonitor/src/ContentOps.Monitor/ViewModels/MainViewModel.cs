@@ -66,6 +66,7 @@ public sealed class MainViewModel : ViewModelBase, IAsyncDisposable
         JobSecondaryActionCommand = new RelayCommand(value => _ = ExecuteJobActionAsync(new(value as JobRowViewModel ?? JobsPage.SelectedJob!, "secondary")));
         JobOpenOutputCommand = new RelayCommand(value => _ = ExecuteJobActionAsync(new(value as JobRowViewModel ?? JobsPage.SelectedJob!, "open-output")));
         JobCancelCommand = new RelayCommand(value => _ = ExecuteJobActionAsync(new(value as JobRowViewModel ?? JobsPage.SelectedJob!, "cancel")));
+        ClearHistoryCommand = new RelayCommand(_ => _ = ClearHistoryAsync(), _ => !IsBusy && JobsPage.IsAllJobsView);
         OpenLogFolderCommand = new RelayCommand(_ => OpenLogFolder());
         SubmitManualJobCommand = new RelayCommand(_ => _ = SubmitManualJobAsync(), _ => !IsBusy && AreManualUrlsValid());
         CancelManualJobCommand = new RelayCommand(_ => { ManualUrl = string.Empty; ManualMessage = string.Empty; ManualPreviewMessage = "Dán URL YouTube để tải metadata"; });
@@ -163,7 +164,7 @@ public sealed class MainViewModel : ViewModelBase, IAsyncDisposable
     public string ManualPreviewChannel => _manualPreviewMetadata?.Channel ?? "--";
     public string ManualPreviewDuration => _manualPreviewMetadata?.Duration ?? "--";
     public string JobFilter { get => _jobFilter; private set => Set(ref _jobFilter, value); }
-    public bool IsBusy { get => _isBusy; private set { if (Set(ref _isBusy, value)) { OnPropertyChanged(nameof(ChannelScoutButtonText)); ((RelayCommand)RefreshCommand).RaiseCanExecuteChanged(); ((RelayCommand)SubmitManualJobCommand).RaiseCanExecuteChanged(); ((RelayCommand)DiscoverChannelJobsCommand).RaiseCanExecuteChanged(); } } }
+    public bool IsBusy { get => _isBusy; private set { if (Set(ref _isBusy, value)) { OnPropertyChanged(nameof(ChannelScoutButtonText)); ((RelayCommand)RefreshCommand).RaiseCanExecuteChanged(); ((RelayCommand)SubmitManualJobCommand).RaiseCanExecuteChanged(); ((RelayCommand)DiscoverChannelJobsCommand).RaiseCanExecuteChanged(); ((RelayCommand)ClearHistoryCommand).RaiseCanExecuteChanged(); } } }
     public int HealthyCount => Services.Count(service => service.State == ServiceState.READY);
     public int AlertCount => Alerts.Count(alert => !alert.Resolved);
     public string HealthSummary => Services.Count == 0 ? "Đang kiểm tra dịch vụ" : $"{HealthyCount}/{Services.Count} services healthy";
@@ -186,6 +187,7 @@ public sealed class MainViewModel : ViewModelBase, IAsyncDisposable
     public ICommand JobSecondaryActionCommand { get; }
     public ICommand JobOpenOutputCommand { get; }
     public ICommand JobCancelCommand { get; }
+    public ICommand ClearHistoryCommand { get; }
     public ICommand OpenLogFolderCommand { get; }
     public ICommand SubmitManualJobCommand { get; }
     public ICommand CancelManualJobCommand { get; }
@@ -637,6 +639,44 @@ public sealed class MainViewModel : ViewModelBase, IAsyncDisposable
         await RefreshAsync();
     }
 
+    private async Task ClearHistoryAsync()
+    {
+        if (!JobsPage.IsAllJobsView || IsBusy) return;
+        var history = Jobs.Where(IsHistoryJob).ToArray();
+        if (history.Length == 0)
+        {
+            LastUpdated = "Không có lịch sử job để xóa.";
+            return;
+        }
+
+        var confirmation = System.Windows.MessageBox.Show(
+            $"Xóa {history.Length} job đã kết thúc khỏi lịch sử?\nJob đang chạy hoặc chờ xử lý sẽ được giữ nguyên.",
+            "Xóa lịch sử job",
+            MessageBoxButton.YesNo,
+            MessageBoxImage.Warning);
+        if (confirmation != MessageBoxResult.Yes) return;
+
+        IsBusy = true;
+        try
+        {
+            var results = await Task.WhenAll(history.Select(job =>
+            {
+                var isManual = job.SourceService?.Contains("Manual", StringComparison.OrdinalIgnoreCase) == true;
+                return isManual ? _lan.DeleteJobAsync(job.Id) : _yt.DeleteJobAsync(job.Id);
+            }));
+            var deleted = results.Count(result => result.Success);
+            LastUpdated = deleted == history.Length
+                ? $"Đã xóa {deleted} lịch sử job."
+                : $"Đã xóa {deleted}/{history.Length} lịch sử job.";
+        }
+        finally
+        {
+            IsBusy = false;
+        }
+
+        await RefreshAsync();
+    }
+
     private void OpenServiceHealth(string? name)
     {
         if (string.IsNullOrWhiteSpace(name) || !Config.Endpoints.TryGetValue(name, out var endpoint)) return;
@@ -650,6 +690,7 @@ public sealed class MainViewModel : ViewModelBase, IAsyncDisposable
         Process.Start(new ProcessStartInfo("explorer.exe", $"\"{folder}\"") { UseShellExecute = true });
     }
     private static bool IsStatus(JobRecord job, params string[] statuses) => statuses.Contains(job.Status, StringComparer.OrdinalIgnoreCase);
+    private static bool IsHistoryJob(JobRecord job) => IsStatus(job, "COMPLETED", "DONE", "FAILED", "ERROR", "CANCELLED", "CANCELED", "INTERRUPTED");
     private IReadOnlyList<string> ManualUrls => SplitLines(ManualUrl);
     private IReadOnlyList<string> ChannelScoutChannels => SplitLines(ChannelScoutInput);
     private bool AreManualUrlsValid() => ManualUrls.Count > 0 && ManualUrls.All(IsValidManualUrl);

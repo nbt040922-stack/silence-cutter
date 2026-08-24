@@ -2,6 +2,7 @@ import json
 import tempfile
 import unittest
 from pathlib import Path
+from unittest.mock import patch
 
 from formatter.renderer import build_render_jobs
 from formatter.title_rewrite import TITLE_REWRITE_PROMPT, _compact_title, rewrite_title_once, safe_filename_title
@@ -20,6 +21,19 @@ class FakeClient:
         if isinstance(response, Exception):
             raise response
         return response
+
+
+class TitleRewriteSafetyTests(unittest.TestCase):
+    def test_safe_pipeline_can_disable_qwen_title_generation(self):
+        with tempfile.TemporaryDirectory() as directory, patch(
+            "qwen_worker.client.QwenWorkerClient", side_effect=AssertionError("Qwen must not load")
+        ):
+            result = rewrite_title_once(
+                Path(directory) / "job", "Original title", Path(directory) / "output",
+                source_id="video", allow_qwen=False,
+            )
+        self.assertEqual(result["status"], "FALLBACK")
+        self.assertEqual(result["generation_count"], 0)
 
 
 def plan(filename_base: str, part_count: int = 3):

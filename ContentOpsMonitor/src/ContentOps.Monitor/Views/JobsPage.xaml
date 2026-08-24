@@ -34,7 +34,17 @@
                     <StackPanel Grid.Column="2" Margin="0,0,10,0"><TextBlock Text="Kênh" Style="{StaticResource MutedText}" FontSize="9" Margin="0,0,0,4"/><ComboBox Style="{StaticResource JobFilterBox}" ItemContainerStyle="{StaticResource JobFilterItem}" ItemsSource="{Binding ChannelOptions}" SelectedIndex="0"/></StackPanel>
                     <StackPanel Grid.Column="3" Margin="0,0,10,0"><TextBlock Text="Ngày tạo" Style="{StaticResource MutedText}" FontSize="9" Margin="0,0,0,4"/><Border Height="32" Background="#101B2D" BorderBrush="#263B55" BorderThickness="1" CornerRadius="5"><Grid><TextBlock Text="Từ ngày          → Đến ngày" Style="{StaticResource MutedText}" FontSize="9" Margin="10,0" VerticalAlignment="Center"/><TextBlock Text="&#xE787;" Style="{StaticResource IconText}" FontSize="12" Foreground="{StaticResource MutedBrush}" HorizontalAlignment="Right" Margin="0,0,9,0"/></Grid></Border></StackPanel>
                     <StackPanel Grid.Column="4" Margin="0,0,10,0"><TextBlock Text="Tìm kiếm" Style="{StaticResource MutedText}" FontSize="9" Margin="0,0,0,4"/><Grid><TextBox Height="32" Padding="9,0,29,0" VerticalContentAlignment="Center" Text="{Binding SearchText, UpdateSourceTrigger=PropertyChanged}" FontSize="10"/><TextBlock Text="&#xE721;" Style="{StaticResource IconText}" FontSize="12" Foreground="{StaticResource MutedBrush}" HorizontalAlignment="Right" Margin="0,0,9,0"/></Grid></StackPanel>
-                    <Button Grid.Column="5" Command="{Binding DataContext.NavigateCommand, RelativeSource={RelativeSource AncestorType=Window}}" CommandParameter="{Binding DataContext.NavigationItems[8], RelativeSource={RelativeSource AncestorType=Window}}" Style="{StaticResource HideWhenRunning}" Height="32" Margin="0,17,0,0" Padding="12,0" Background="#246DE5" BorderBrush="#3986F4"><StackPanel Orientation="Horizontal"><TextBlock Text="&#xE710;" Style="{StaticResource IconText}" FontSize="11" Margin="0,0,6,0"/><TextBlock Text="Tạo Job mới" FontSize="10" VerticalAlignment="Center"/></StackPanel></Button>
+                    <Button Grid.Column="5" Command="{Binding DataContext.ClearHistoryCommand, RelativeSource={RelativeSource AncestorType=Window}}" Height="32" Margin="0,17,0,0" Padding="12,0" Background="#552738" BorderBrush="#A83A55">
+                        <Button.Style>
+                            <Style TargetType="Button" BasedOn="{StaticResource JobDetailButton}">
+                                <Setter Property="Visibility" Value="Collapsed"/>
+                                <Style.Triggers>
+                                    <DataTrigger Binding="{Binding IsAllJobsView}" Value="True"><Setter Property="Visibility" Value="Visible"/></DataTrigger>
+                                </Style.Triggers>
+                            </Style>
+                        </Button.Style>
+                        <StackPanel Orientation="Horizontal"><TextBlock Text="&#xE74D;" Style="{StaticResource IconText}" FontSize="11" Margin="0,0,6,0"/><TextBlock Text="Xóa lịch sử" FontSize="10" VerticalAlignment="Center"/></StackPanel>
+                    </Button>
                 </Grid>
 
                 <Grid Grid.Row="1" Margin="0,8,0,0">
