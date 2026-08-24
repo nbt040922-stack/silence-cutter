@@ -1,4 +1,5 @@
 using System.Collections.ObjectModel;
+using System.Text.Json.Serialization;
 
 namespace ContentOps.Monitor.Models;
 
@@ -107,6 +108,14 @@ public sealed record ManualVideoMetadata(
     string? Duration,
     string? Thumbnail,
     string? Url);
+
+public sealed record ResolvedChannel(
+    [property: JsonPropertyName("channel_id")]
+    string? ChannelId,
+    [property: JsonPropertyName("canonical_url")]
+    string? CanonicalUrl,
+    [property: JsonPropertyName("title")]
+    string? Title);
 
 public sealed record ChannelRecord(
     string Id,

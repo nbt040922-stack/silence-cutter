@@ -85,6 +85,28 @@ public sealed class ApiAdapterTests
     }
 
     [Fact]
+    public async Task YtNotifiAdapterResolvesChannelUrlBeforeCreation()
+    {
+        HttpRequestMessage? received = null;
+        var receivedBody = string.Empty;
+        using var client = new ApiClient(new FakeHandler(async request =>
+        {
+            received = request;
+            receivedBody = await request.Content!.ReadAsStringAsync();
+            return JsonResponse("{\"channel_id\":\"UC_demo\",\"canonical_url\":\"https://youtube.com/channel/UC_demo\",\"title\":\"Demo\"}");
+        }));
+        var adapter = new YtNotifiAdapter(client, new Uri("http://127.0.0.1:8787"));
+
+        var result = await adapter.ResolveChannelAsync("https://youtube.com/@demo");
+
+        Assert.True(result.Success);
+        Assert.Equal("UC_demo", result.Value!.ChannelId);
+        Assert.Equal(HttpMethod.Post, received!.Method);
+        Assert.Equal("/api/channels/resolve", received.RequestUri!.AbsolutePath);
+        Assert.Contains("https://youtube.com/@demo", receivedBody);
+    }
+
+    [Fact]
     public async Task YtNotifiAdapterDeletesChannelById()
     {
         HttpRequestMessage? received = null;

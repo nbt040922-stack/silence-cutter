@@ -35,6 +35,9 @@ public sealed class YtNotifiAdapter(ApiClient client, Uri baseUri)
     public Task<ApiResult<JsonElement>> AddChannelAsync(string channelUrl, string name, CancellationToken ct = default) =>
         client.PostJsonAsync<JsonElement>(new(baseUri, "/api/channels"), new { channel_id = channelUrl, name }, cancellationToken: ct);
 
+    public Task<ApiResult<ResolvedChannel>> ResolveChannelAsync(string channelUrl, CancellationToken ct = default) =>
+        client.PostJsonAsync<ResolvedChannel>(new(baseUri, "/api/channels/resolve"), new { url = channelUrl }, cancellationToken: ct);
+
     public Task<ApiResult<JsonElement>> DeleteChannelAsync(string channelId, CancellationToken ct = default) =>
         client.DeleteJsonAsync<JsonElement>(new(baseUri, $"/api/channels/{Uri.EscapeDataString(channelId)}"), ct);
 

@@ -370,11 +370,18 @@ public sealed class MainViewModel : ViewModelBase, IAsyncDisposable
         IsBusy = true;
         try
         {
-            var results = await Task.WhenAll(drafts.Select(draft => _yt.AddChannelAsync(draft.ChannelUrl, draft.ChannelName)));
+            var results = await Task.WhenAll(drafts.Select(async draft =>
+            {
+                var resolved = await _yt.ResolveChannelAsync(draft.ChannelUrl);
+                if (!resolved.Success || string.IsNullOrWhiteSpace(resolved.Value?.ChannelId))
+                    return (Success: false, Error: $"{draft.ChannelUrl}: {resolved.Error ?? "Không resolve được kênh."}");
+                var added = await _yt.AddChannelAsync(resolved.Value.ChannelId, draft.ChannelName);
+                return (Success: added.Success, Error: added.Success ? null : $"{draft.ChannelUrl}: {added.Error ?? "Không thêm được kênh."}");
+            }));
             var added = results.Count(result => result.Success);
             ChannelsMessage = added == drafts.Count
                 ? $"Đã thêm {added} kênh."
-                : $"Đã thêm {added}/{drafts.Count} kênh; một số dòng bị từ chối.";
+                : $"Đã thêm {added}/{drafts.Count} kênh. {results.FirstOrDefault(result => !result.Success).Error}";
         }
         finally { IsBusy = false; }
         await RefreshAsync();
