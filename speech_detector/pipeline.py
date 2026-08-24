@@ -1,9 +1,11 @@
 from __future__ import annotations
 
 import json
+import hashlib
 import tempfile
 import time
 from concurrent.futures import ThreadPoolExecutor
+from dataclasses import replace
 from pathlib import Path
 from typing import Any
 
@@ -204,6 +206,9 @@ def analyze_speech(
     source = Path(input_path).expanduser().resolve()
     if not source.is_file():
         raise FileNotFoundError(f"input media does not exist: {source}")
+    if config.natural_silence_seed is None:
+        digest = hashlib.sha256(str(source).encode("utf-8")).digest()
+        config = replace(config, natural_silence_seed=int.from_bytes(digest[:8], "big"))
     media = probe_media(source)
     if not media["has_audio"]:
         raise MediaProcessError("input media contains no audio stream")

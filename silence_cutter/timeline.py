@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import math
+import random
 from collections.abc import Iterable, Mapping
 
 from .config import SilenceCutterConfig
@@ -68,6 +69,33 @@ def _expand_short_keeps(
     return _merge(expanded)
 
 
+def _naturalize_gaps(
+    gaps: list[Segment], duration: float, config: SilenceCutterConfig,
+) -> list[Segment]:
+    """Leave a small, bounded silence tail/lead around each real cut."""
+    if not gaps or config.natural_silence_max <= 0:
+        return gaps
+    rng = random.Random(config.natural_silence_seed)
+    result: list[Segment] = []
+    for gap in gaps:
+        length = gap["end"] - gap["start"]
+        maximum = min(config.natural_silence_max, max(0.0, length - _EPSILON))
+        minimum = min(config.natural_silence_min, maximum)
+        retained = rng.uniform(minimum, maximum)
+        if retained <= _EPSILON:
+            result.append(gap)
+            continue
+        if gap["start"] <= _EPSILON:
+            result.append({"start": gap["start"], "end": gap["end"] - retained})
+        elif gap["end"] >= duration - _EPSILON:
+            result.append({"start": gap["start"] + retained, "end": gap["end"]})
+        elif rng.random() < 0.5:
+            result.append({"start": gap["start"], "end": gap["end"] - retained})
+        else:
+            result.append({"start": gap["start"] + retained, "end": gap["end"]})
+    return result
+
+
 def build_timeline(
     speech_timestamps: Iterable[Mapping[str, object]],
     total_duration: float,
@@ -79,6 +107,8 @@ def build_timeline(
         return {"keep": [], "cut": []}
 
     speech = _merge(_normalize(speech_timestamps, total_duration), config.merge_gap)
+    if not speech:
+        return {"keep": [], "cut": [{"start": 0.0, "end": total_duration}]}
     padded = [
         {
             "start": max(0.0, item["start"] - config.speech_pad_before),
@@ -93,6 +123,7 @@ def build_timeline(
         for gap in _complement(protected, total_duration)
         if gap["end"] - gap["start"] + _EPSILON >= config.min_silence_duration
     ]
+    long_gaps = _naturalize_gaps(long_gaps, total_duration, config)
     keeps = _complement(long_gaps, total_duration)
     keeps = _expand_short_keeps(keeps, total_duration, config.min_keep_duration)
     cuts = _complement(keeps, total_duration)

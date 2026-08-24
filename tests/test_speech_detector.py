@@ -75,7 +75,9 @@ class SpeechFusionTests(unittest.TestCase):
             diagnostics["largest_sensevoice_fine_speech_interval"], 1.3
         )
         self.assertEqual(model.inference.call_args.kwargs["max_end_silence_time"], 200)
-        timeline = build_keep_cut(fine, 5, HighRecallConfig())
+        timeline = build_keep_cut(
+            fine, 5, HighRecallConfig(natural_silence_min=0, natural_silence_max=0)
+        )
         self.assertIn({"start": 1, "end": 1.7}, timeline["cut"])
         self.assertIn({"start": 2.5, "end": 3.7}, timeline["cut"])
 
@@ -136,6 +138,8 @@ class SpeechFusionTests(unittest.TestCase):
         self.assertEqual(config.merge_gap, 0.15)
         self.assertEqual(config.min_silence_duration, 0.50)
         self.assertEqual(config.min_keep_duration, 0)
+        self.assertEqual(config.natural_silence_min, 0.1)
+        self.assertEqual(config.natural_silence_max, 0.3)
 
     def test_detector_positive_intervals_survive_union_and_overlap_merges(self):
         silero = [interval(1, 3), interval(6, 8)]
@@ -152,6 +156,7 @@ class SpeechFusionTests(unittest.TestCase):
         config = HighRecallConfig(
             speech_pad_before=0.25, speech_pad_after=0.30,
             merge_gap=0.35, min_silence_duration=0,
+            natural_silence_min=0, natural_silence_max=0,
         )
         union = [interval(1, 2, "union"), interval(2.2, 3, "union"), interval(4.5, 5, "union")]
         timeline = build_keep_cut(union, 6, config)
@@ -187,7 +192,9 @@ class SpeechFusionTests(unittest.TestCase):
         self.assertEqual(timeline["cut"], [{"start": 0.0, "end": 10}])
 
     def test_zero_padding_and_gap_merge_boundary(self):
-        config = HighRecallConfig(min_silence_duration=0)
+        config = HighRecallConfig(
+            min_silence_duration=0, natural_silence_min=0, natural_silence_max=0
+        )
         merged = build_keep_cut(
             [interval(1, 2), interval(2.10, 3)], 4, config
         )
@@ -201,7 +208,7 @@ class SpeechFusionTests(unittest.TestCase):
         )
 
     def test_silence_cut_threshold_is_inclusive(self):
-        config = HighRecallConfig()
+        config = HighRecallConfig(natural_silence_min=0, natural_silence_max=0)
         below = build_keep_cut([interval(0, 1), interval(1.49, 2)], 2, config)
         boundary = build_keep_cut([interval(0, 1), interval(1.50, 2)], 2, config)
         long = build_keep_cut([interval(0, 1), interval(2, 3)], 3, config)

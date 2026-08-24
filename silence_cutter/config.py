@@ -10,6 +10,9 @@ class SilenceCutterConfig:
     speech_pad_after: float = 0.30
     merge_gap: float = 0.35
     min_keep_duration: float = 0.50
+    natural_silence_min: float = 0.0
+    natural_silence_max: float = 0.0
+    natural_silence_seed: int | None = None
 
     def __post_init__(self) -> None:
         if self.sample_rate != 16_000:
@@ -22,9 +25,13 @@ class SilenceCutterConfig:
             "speech_pad_after",
             "merge_gap",
             "min_keep_duration",
+            "natural_silence_min",
+            "natural_silence_max",
         ):
             if getattr(self, name) < 0:
                 raise ValueError(f"{name} must be non-negative")
+        if self.natural_silence_max < self.natural_silence_min:
+            raise ValueError("natural_silence_max must be >= natural_silence_min")
 
-    def to_dict(self) -> dict[str, int | float]:
+    def to_dict(self) -> dict[str, object]:
         return asdict(self)

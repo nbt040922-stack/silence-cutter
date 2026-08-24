@@ -82,6 +82,22 @@ class TimelineTests(unittest.TestCase):
         result = build_timeline(speech, 4, config(merge_gap=0.3))
         self.assertEqual(result["keep"], [{"start": 1.0, "end": 3.0}])
 
+    def test_natural_silence_retention_is_bounded_and_seeded(self):
+        settings = config(
+            min_keep_duration=0.0,
+            natural_silence_min=0.1,
+            natural_silence_max=0.3,
+            natural_silence_seed=7,
+        )
+        first = build_timeline([{"start": 0, "end": 1}, {"start": 4, "end": 5}], 5, settings)
+        second = build_timeline([{"start": 0, "end": 1}, {"start": 4, "end": 5}], 5, settings)
+
+        self.assertEqual(first, second)
+        self.assertEqual(len(first["cut"]), 1)
+        retained = 3.0 - (first["cut"][0]["end"] - first["cut"][0]["start"])
+        self.assertGreaterEqual(retained, 0.1)
+        self.assertLessEqual(retained, 0.3)
+
 
 if __name__ == "__main__":
     unittest.main()

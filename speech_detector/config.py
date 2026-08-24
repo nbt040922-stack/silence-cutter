@@ -23,6 +23,9 @@ class HighRecallConfig:
     merge_gap: float = 0.15
     min_silence_duration: float = 0.50
     min_keep_duration: float = 0.0
+    natural_silence_min: float = 0.1
+    natural_silence_max: float = 0.3
+    natural_silence_seed: int | None = None
     sensevoice_model: str = field(default_factory=_sensevoice_model)
     sensevoice_vad_model: str = field(default_factory=_sensevoice_vad_model)
     sensevoice_device: str = "cuda:0"
@@ -44,6 +47,9 @@ class HighRecallConfig:
             speech_pad_after=self.speech_pad_after,
             merge_gap=self.merge_gap,
             min_keep_duration=self.min_keep_duration,
+            natural_silence_min=self.natural_silence_min,
+            natural_silence_max=self.natural_silence_max,
+            natural_silence_seed=self.natural_silence_seed,
         )
 
     def to_dict(self) -> dict[str, object]:
