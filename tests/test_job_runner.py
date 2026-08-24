@@ -518,7 +518,7 @@ class JobRunnerTests(unittest.TestCase):
         self.assertEqual(result["status"], "NOT_APPLICABLE")
         run.assert_not_called()
 
-    @patch("silence_cutter.audio.probe_media", return_value={"duration": 901.0})
+    @patch("silence_cutter.audio.probe_media", return_value={"duration": 1501.0})
     @patch("backend.job_runner.subprocess.run")
     def test_long_selector_timeout_fails_open(self, run, _probe):
         import subprocess

@@ -1458,6 +1458,37 @@ def _run_semantic_stage(job: dict[str, Any], job_dir: Path, source: Path, report
     return result
 
 
+def _run_brand_scan_stage(job: dict[str, Any], job_dir: Path, source: Path, report: Path) -> dict[str, Any]:
+    """Run the recall-first visual brand/ad scan before clean-master rendering."""
+    from brand_scan.models import BrandScanResult
+    from brand_scan.detector import BrandScanDetector
+    from brand_scan.pipeline import run_brand_scan
+    from brand_scan.qr import detect_qr
+
+    artifact = job_dir / "brand_ad_scan.json"
+    try:
+        from semantic_cleaner.qwen import QwenWorkerDetector
+
+        detector = QwenWorkerDetector()
+        result = run_brand_scan(source, report, artifact, BrandScanDetector(detector, detect_qr))
+    except Exception as exc:
+        result = BrandScanResult(
+            "BRAND_SCAN_INCOMPLETE", [], [], reason=f"{type(exc).__name__}: {exc}",
+        ).to_dict()
+        artifact.parent.mkdir(parents=True, exist_ok=True)
+        artifact.write_text(json.dumps(result, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
+        report_data = json.loads(report.read_text(encoding="utf-8"))
+        report_data.update(
+            brand_scan_status=result["status"], brand_scan_artifact=str(artifact),
+            brand_scan_reason=result["reason"], brand_cut_intervals=[],
+            brand_removed_duration=0.0, brand_scan_time=0.0,
+        )
+        report.write_text(json.dumps(report_data, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
+    _atomic_json(artifact, result)
+    _log(job_dir, f"Brand/ad scan: {result['status']}")
+    return result
+
+
 def _render_clean_master_from_report(
     source: Path, rendered: Path, report_path: Path,
 ) -> Path:
@@ -1557,6 +1588,15 @@ def _process_ready_job(
         long_selection = _run_long_video_stage(job, job_dir, source)
         rendered, report = pipeline(job, job_dir, source)
         semantic = _run_semantic_stage(job, job_dir, source, report)
+        brand_scan = {"status": "NOT_RUN"}
+        if pipeline is _pipeline:
+            brand_scan = _run_brand_scan_stage(job, job_dir, source, report)
+            if brand_scan.get("status") == "BRAND_SCAN_INCOMPLETE":
+                error = brand_scan.get("reason") or "brand/ad scan incomplete"
+                job.update(status="FAILED", stage="brand_scan", error=error, finished_at=_now(), pid=None)
+                _write_job(job, settings)
+                _log(job_dir, f"Brand/ad scan incomplete: {error}")
+                return {"status": "BRAND_SCAN_INCOMPLETE", "error": error, "report_path": str(report)}
         analysis_time = time.perf_counter() - analysis_wall_started
         report_data = json.loads(report.read_text(encoding="utf-8"))
         clean_duration = report_data.get("expected_output_duration")
@@ -1612,6 +1652,9 @@ def _process_ready_job(
             semantic_cleaner_status=semantic.get("status"),
             semantic_segments_path=str((job_dir / "semantic_segments.json").resolve()),
             semantic_processing_time=semantic.get("total_additional_processing_time"),
+            brand_scan_status=brand_scan.get("status"),
+            brand_scan_artifact=str((job_dir / "brand_ad_scan.json").resolve()),
+            brand_removed_duration=brand_scan.get("removed_duration", 0.0),
             long_video_selector_status=long_selection.get("status"),
             long_video_selection_path=str((job_dir / "long_video_selection.json").resolve()),
             long_video_selected_ranges=long_selection.get("selected_ranges") or [],
