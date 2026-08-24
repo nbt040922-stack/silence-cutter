@@ -39,6 +39,9 @@ ENHANCED_TWO_COARSE = "\n".join([
     "400,0.99,topic one", "1200,0.95,topic two",
 ])
 class LongVideoSelectorTests(unittest.TestCase):
+    def test_default_qwen_threshold_is_25_minutes(self):
+        self.assertEqual(LongVideoSelectorConfig().threshold, 1500.0)
+
     def test_short_video_does_not_invoke_qwen(self):
         with tempfile.TemporaryDirectory() as directory:
             factory = Mock()
@@ -48,6 +51,17 @@ class LongVideoSelectorTests(unittest.TestCase):
             )
         self.assertEqual(result["status"], "NOT_APPLICABLE")
         factory.assert_not_called()
+
+    def test_video_at_or_below_25_minutes_does_not_invoke_qwen(self):
+        for duration in (1499.9, 1500.0):
+            with self.subTest(duration=duration), tempfile.TemporaryDirectory() as directory:
+                factory = Mock()
+                result = run_long_video_selector(
+                    "source.mp4", duration, Path(directory) / "selection.json",
+                    detector_factory=factory,
+                )
+            self.assertEqual(result["status"], "NOT_APPLICABLE")
+            factory.assert_not_called()
 
     @patch("long_video_selector.selector._contact_sheets", return_value=[])
     @patch("long_video_selector.selector._visual_candidates", return_value=([], []))

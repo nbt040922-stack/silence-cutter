@@ -23,13 +23,13 @@ CENTER must be one absolute numeric source second. SCORE is 0..1. TOPIC is at mo
 
 @dataclass(frozen=True, slots=True)
 class LongVideoSelectorConfig:
-    threshold: float = 900.0
+    threshold: float = 1500.0
     coarse_chunk: float = 60.0
     refinement_interval: float = 20.0
 
     @classmethod
     def from_environment(cls) -> "LongVideoSelectorConfig":
-        return cls(threshold=float(os.environ.get("LONG_VIDEO_THRESHOLD_SECONDS", "900")))
+        return cls(threshold=float(os.environ.get("LONG_VIDEO_THRESHOLD_SECONDS", "1500")))
 
 
 def adaptive_target_duration(source_duration: float) -> float:
