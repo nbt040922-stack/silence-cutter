@@ -1,6 +1,31 @@
 from lan_job_api import authorize, is_local_address, validate_submission
 
 
+def test_jobs_for_display_hides_only_superseded_failed_download_parent():
+    from lan_job_api import _jobs_for_display
+
+    failed = {
+        "id": "failed-parent", "source_path": r"D:\\downloads\\video.mp4",
+        "status": "FAILED", "stage": "worker_crashed",
+        "finished_at": "2026-08-24T22:20:00+07:00",
+    }
+    done = {
+        "id": "done-job", "source_path": r"D:\\downloads\\video.mp4",
+        "status": "DONE", "stage": "done",
+        "finished_at": "2026-08-24T22:25:00+07:00",
+    }
+    real_failure = {
+        "id": "real-failure", "source_path": r"D:\\downloads\\other.mp4",
+        "status": "FAILED", "stage": "download_failed",
+        "finished_at": "2026-08-24T22:26:00+07:00",
+    }
+
+    visible, hidden = _jobs_for_display([failed, done, real_failure])
+
+    assert [job["id"] for job in visible] == ["done-job", "real-failure"]
+    assert hidden == 1
+
+
 def test_discovery_selects_one_unseen_highest_view_video_per_channel(monkeypatch, tmp_path):
     from datetime import datetime, timezone
     import json

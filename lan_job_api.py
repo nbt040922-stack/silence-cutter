@@ -60,7 +60,7 @@ async function submitJob(){try{let r=await fetch('/jobs',{method:'POST',headers:
 async function clearHistory(){if(!confirm('Xoá tất cả job đã kết thúc? Job đang chạy sẽ được giữ lại.'))return;try{let r=await fetch('/jobs/history',{method:'DELETE',headers:auth()});let d=await r.json();if(!r.ok)throw Error(d.error);$('message').className='ok';$('message').textContent='Đã xoá '+d.removed+' job lịch sử.';loadJobs()}catch(e){$('message').className='err';$('message').textContent=e.message}}
 fetch('/health').then(r=>r.json()).then(d=>$('health').textContent='API: '+d.status+' • Cổng '+d.port).catch(()=>$('health').textContent='API không kết nối');
 function renderJobs(items){$('jobs').style.whiteSpace='normal';$('jobs').innerHTML=(items||[]).map(j=>{const p=Math.max(0,Math.min(100,Number(j.progress||0)));const title=j.display_name||j.title||j.url||j.id;const error=j.error||j.formatter_error||j.download_error_code||'';const output=j.output_folder||j.output_path||'';return `<div style="background:#0e1520;padding:12px;margin:8px 0;border-radius:8px"><b>${title}</b><br>Trạng thái: ${j.status||'—'} • Giai đoạn: ${j.stage||'—'} • Tiến độ: ${p.toFixed(0)}%<div style="height:7px;background:#38465b;border-radius:5px;margin-top:7px"><div style="height:7px;width:${p}%;background:#46c77a;border-radius:5px"></div></div>${error?`<br><span style="color:#ff8888">Lỗi: ${error}</span>`:''}${output?`<br>Kết quả: ${output}`:''}</div>`}).join('')||'Chưa có job.'}
-window.loadJobs=async function(){try{let r=await fetch('/jobs',{headers:auth()});let d=await r.json();if(!r.ok)throw Error(d.error);renderJobs(d.jobs);$('message').className='ok';$('message').textContent='Cập nhật '+new Date().toLocaleTimeString();if($('updated'))$('updated').textContent='↻ Cập nhật: '+new Date().toLocaleTimeString()}catch(e){$('message').className='err';$('message').textContent=e.message}}
+window.loadJobs=async function(){try{let r=await fetch('/jobs',{headers:auth()});let d=await r.json();if(!r.ok)throw Error(d.error);renderJobs(d.jobs);$('message').className='ok';const hidden=Number(d.hidden_stale_failures||0);$('message').textContent='Cập nhật '+new Date().toLocaleTimeString()+(hidden?' · Đã ẩn '+hidden+' lỗi cũ đã có kết quả mới':'');if($('updated'))$('updated').textContent='↻ Cập nhật: '+new Date().toLocaleTimeString()}catch(e){$('message').className='err';$('message').textContent=e.message}}
 function renderJobs(items){$('jobs').style.whiteSpace='normal';$('jobs').innerHTML=(items||[]).map(j=>{const p=Math.max(0,Math.min(100,Number(j.progress||0)));const title=j.display_name||j.title||j.url||j.id;const error=j.error||j.formatter_error||j.download_error_code||'';const output=j.output_folder||j.output_path||'';const terminal=['DONE','FAILED','CANCELLED','INTERRUPTED'].includes(j.status);const action=terminal?`<button onclick="deleteJob('${j.id}')" style="background:#a63b3b">Xoá</button>`:`<button onclick="cancelJob('${j.id}')" style="background:#8a5a20">Huỷ</button>`;return `<div style="background:#0e1520;padding:12px;margin:8px 0;border-radius:8px"><b>${title}</b><br>Trạng thái: ${j.status||'—'} • Giai đoạn: ${j.stage||'—'} • Tiến độ: ${p.toFixed(0)}%<div style="height:7px;background:#38465b;border-radius:5px;margin-top:7px"><div style="height:7px;width:${p}%;background:#46c77a;border-radius:5px"></div></div>${error?`<br><span style="color:#ff8888">Lỗi: ${error}</span>`:''}${output?`<br>Kết quả: ${output}`:''}<br>${action}</div>`}).join('')||'Chưa có job.'}
 async function cancelJob(id){if(!confirm('Huỷ job này?'))return;try{let r=await fetch('/jobs/'+encodeURIComponent(id)+'/cancel',{method:'POST',headers:auth()});let d=await r.json();if(!r.ok)throw Error(d.error);loadJobs()}catch(e){$('message').className='err';$('message').textContent=e.message}}
 async function deleteJob(id){if(!confirm('Xoá job lịch sử này?'))return;try{let r=await fetch('/jobs/'+encodeURIComponent(id),{method:'DELETE',headers:auth()});let d=await r.json();if(!r.ok)throw Error(d.error);loadJobs()}catch(e){$('message').className='err';$('message').textContent=e.message}}
@@ -687,6 +687,52 @@ def _watch_callbacks() -> None:
         time.sleep(1.0)
 
 
+def _job_display_key(job: dict[str, Any]) -> str | None:
+    source = str(job.get("source_path") or "").strip()
+    if source:
+        return "source:" + os.path.normcase(os.path.normpath(source))
+    video_id = str(job.get("video_id") or "").strip()
+    if video_id:
+        return "video:" + video_id
+    url = str(job.get("url") or "").strip()
+    return "url:" + url if url else None
+
+
+def _job_display_time(job: dict[str, Any]) -> float:
+    value = job.get("finished_at") or job.get("completed_at") or job.get("created_at")
+    if not value:
+        return 0.0
+    try:
+        return datetime.fromisoformat(str(value).replace("Z", "+00:00")).timestamp()
+    except (TypeError, ValueError, OverflowError):
+        return 0.0
+
+
+def _jobs_for_display(jobs: list[dict[str, Any]]) -> tuple[list[dict[str, Any]], int]:
+    """Hide stale worker-crash parents after a newer run succeeded.
+
+    The underlying job history remains untouched; this only prevents the LAN
+    dashboard from presenting an obsolete download/worker parent as current.
+    """
+    newest_done: dict[str, float] = {}
+    for job in jobs:
+        if str(job.get("status") or "").upper() != "DONE":
+            continue
+        key = _job_display_key(job)
+        if key:
+            newest_done[key] = max(newest_done.get(key, 0.0), _job_display_time(job))
+    visible: list[dict[str, Any]] = []
+    hidden = 0
+    for job in jobs:
+        key = _job_display_key(job)
+        failed = str(job.get("status") or "").upper() == "FAILED"
+        if failed and key and newest_done.get(key, 0.0) > _job_display_time(job):
+            hidden += 1
+            continue
+        visible.append(job)
+    return visible, hidden
+
+
 class _Handler(BaseHTTPRequestHandler):
     def log_message(self, _format: str, *args: Any) -> None:
         return
@@ -748,7 +794,8 @@ class _Handler(BaseHTTPRequestHandler):
             return
         if self.path == "/jobs":
             try:
-                self._reply(200, {"jobs": _backend().list_jobs()})
+                jobs, hidden = _jobs_for_display(_backend().list_jobs())
+                self._reply(200, {"jobs": jobs, "hidden_stale_failures": hidden})
             except Exception as error:
                 self._reply(500, {"error": str(error)})
             return
