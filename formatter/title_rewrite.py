@@ -9,15 +9,36 @@ from pathlib import Path
 from typing import Any
 
 
-TITLE_REWRITE_PROMPT = """Rewrite this video title into one concise, high-engagement, natural, truthful title in the SAME LANGUAGE. Preserve the core subject, named entities, useful numbers, and strongest reason to click; never invent facts or change the meaning. Do not summarize it into a vague topic. Remove greetings, filler, repeated phrases, decorative brackets, and unnecessary details. Prefer 6-12 words and stay under 60 characters whenever the language allows; Japanese/Chinese/Korean titles should stay under 42 characters. The result must fit a three-line mobile banner. Avoid spammy ALL CAPS, emoji, hashtags, markdown, SEO lists, SHOCKING, YOU WON'T BELIEVE, MUST WATCH, and excessive punctuation. Output only valid JSON: {{\"rewritten_title\":\"...\"}}.
+TITLE_REWRITE_PROMPT = """You are the mandatory TikTok title editor.
 
-Style calibration:
-- 50 *NEW* Dollar Tree Deals you NEED to buy! -> 50 Dollar Tree Finds Actually Worth Buying
-- I Live Alone in Retirement and It's a Game Changer! -> Why Living Alone in Retirement Changed Everything
-- Why Leasing a Car in Retirement ACTUALLY Works -> Why Leasing a Car in Retirement Might Actually Make Sense
-- THIS is How Much it Costs to Build a House in Colombia -> What It Really Costs to Build a House in Colombia
+Always rewrite the input title. Never return the original title unchanged; never return the original title, leave the field empty, or answer that no rewrite is needed.
+
+Language and meaning:
+- Detect the source title's primary language and writing system.
+- Write the rewritten title in the same language and writing system (SAME LANGUAGE as the source); never translate it.
+- Preserve the core subject, named entities, useful numbers, event and strongest truthful reason to watch.
+- Never invent facts, change the meaning, or turn the title into a vague generic topic.
+
+TikTok Community Guidelines:
+- Make the title suitable for the TikTok Community Guidelines.
+- Do not promote hate, threats, violence, sexual exploitation of minors, explicit sexual content, self-harm, dangerous illegal acts, harassment, defamation, or dangerous medical/financial/legal claims.
+- If the source contains unsafe or disallowed wording, rewrite it neutrally while preserving the legitimate topic.
+- Do not use deceptive clickbait, fabricated urgency, false certainty, or claims such as SHOCKING, YOU WON'T BELIEVE, MUST WATCH, or 100%% GUARANTEED.
+
+Style and layout:
+- Keep it concise, natural, compelling and truthful; prefer 6-12 words or the equivalent in the source language.
+- Stay under 60 characters when the language allows; Japanese/Chinese/Korean should stay under 42 characters.
+- Make it fit a three-line vertical mobile banner.
+- Remove greetings, filler, repetition, decorative brackets, hashtags, markdown, SEO lists, excessive emoji, ALL CAPS and repeated punctuation.
+- Keep a clear hook based on the real content, not an invented promise.
+
+Output contract:
+- Return only valid JSON. No markdown, explanation, apology or extra keys.
+- The rewritten_title field is mandatory and must contain a newly rewritten title.
+- Use this exact schema: {{\"rewritten_title\":\"...\"}}
 
 ORIGINAL TITLE: {title}"""
+TITLE_REWRITE_PROMPT_VERSION = 2
 
 _HOOK_WORDS = {
     "actually", "avoid", "before", "bigger", "changed", "changes", "consequence",
@@ -183,7 +204,11 @@ def rewrite_title_once(
             max_cached = 42 if re.search(
                 r"[\u3040-\u30ff\u3400-\u9fff\uac00-\ud7af]", original_title
             ) else 72
-            if cached.get("filename_base") and cached_title and len(cached_title) <= max_cached:
+            if (
+                cached.get("prompt_version") == TITLE_REWRITE_PROMPT_VERSION
+                and cached.get("filename_base") and cached_title
+                and len(cached_title) <= max_cached
+            ):
                 return cached
         except (OSError, ValueError):
             pass
@@ -236,7 +261,8 @@ def rewrite_title_once(
         Path(output_dir), safe_rewritten, source_id, part_count,
     )
     artifact = {
-        "schema_version": 1,
+        "schema_version": 2,
+        "prompt_version": TITLE_REWRITE_PROMPT_VERSION,
         "original_title": original_title,
         "rewritten_title": rewritten,
         "safe_rewritten_title": safe_rewritten,

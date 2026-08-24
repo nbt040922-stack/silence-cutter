@@ -4,7 +4,7 @@ import unittest
 from pathlib import Path
 
 from formatter.renderer import build_render_jobs
-from formatter.title_rewrite import _compact_title, rewrite_title_once, safe_filename_title
+from formatter.title_rewrite import TITLE_REWRITE_PROMPT, _compact_title, rewrite_title_once, safe_filename_title
 
 
 class FakeClient:
@@ -34,6 +34,12 @@ def plan(filename_base: str, part_count: int = 3):
 
 
 class TitleRewriteTests(unittest.TestCase):
+    def test_qwen_prompt_requires_mandatory_same_language_safe_rewrite(self):
+        self.assertIn("Always rewrite the input title", TITLE_REWRITE_PROMPT)
+        self.assertIn("same language and writing system", TITLE_REWRITE_PROMPT)
+        self.assertIn("TikTok Community Guidelines", TITLE_REWRITE_PROMPT)
+        self.assertIn("never return the original title", TITLE_REWRITE_PROMPT)
+
     def test_compact_fallback_preserves_meaningful_prefix_for_long_japanese_title(self):
         original = "【コストコ保存】購入品のその後はこうやって仕分け・冷凍してます！近況報告もあります。冷凍方法と保存期間を詳しく紹介します"
         compact = _compact_title(original)
@@ -68,6 +74,21 @@ class TitleRewriteTests(unittest.TestCase):
                 client=FakeClient('{"rewritten_title":"Why This Shorter Title Matters"}'),
             )
         self.assertEqual(result["rewritten_title"], "Why This Shorter Title Matters")
+
+    def test_old_prompt_cache_is_rewritten(self):
+        original = "Original title"
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / "title_rewrite.json"
+            path.write_text(json.dumps({
+                "schema_version": 1,
+                "rewritten_title": "Old cached title",
+                "filename_base": "Old cached title",
+            }), encoding="utf-8")
+            result = rewrite_title_once(
+                directory, original, directory, source_id="id",
+                client=FakeClient('{"rewritten_title":"Why This Original Title Matters"}'),
+            )
+        self.assertEqual(result["rewritten_title"], "Why This Original Title Matters")
 
     def test_text_only_worker_task_valid_json_and_one_generation(self):
         with tempfile.TemporaryDirectory() as directory:
