@@ -49,3 +49,4 @@ lan-token
 ContentOpsMonitor/**/bin/
 ContentOpsMonitor/**/obj/
 ContentOpsMonitor/publish/
+ContentOpsMonitor/releases/staging/
