@@ -67,3 +67,20 @@ def test_manifest_accepts_utf8_bom_file(tmp_path):
     }), encoding="utf-8-sig")
 
     assert ModelManifest.from_file(path).model == "x"
+
+
+def test_log_write_falls_back_when_programdata_log_is_denied(tmp_path, monkeypatch):
+    primary = tmp_path / "programdata" / "model.log"
+    fallback = tmp_path / "localappdata" / "ContentOps" / "SilenceCore" / "logs" / "installer" / "model.log"
+    monkeypatch.setenv("LOCALAPPDATA", str(tmp_path / "localappdata"))
+    original_open = Path.open
+
+    def open_with_denied_primary(path, *args, **kwargs):
+        if path == primary:
+            raise PermissionError("denied")
+        return original_open(path, *args, **kwargs)
+
+    monkeypatch.setattr(Path, "open", open_with_denied_primary)
+    ModelManager(tmp_path / "model", primary)._write_log("ok")
+
+    assert fallback.read_text(encoding="utf-8") == "ok\n"

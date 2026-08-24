@@ -169,6 +169,18 @@ class ModelManager:
     def _write_log(self, message: str) -> None:
         if not self.log_path:
             return
-        self.log_path.parent.mkdir(parents=True, exist_ok=True)
-        with self.log_path.open("a", encoding="utf-8") as stream:
-            stream.write(message.rstrip() + "\n")
+        candidates = [self.log_path]
+        local_app_data = os.environ.get("LOCALAPPDATA")
+        if local_app_data:
+            candidates.append(
+                Path(local_app_data)
+                / "ContentOps" / "SilenceCore" / "logs" / "installer" / "model.log"
+            )
+        for path in candidates:
+            try:
+                path.parent.mkdir(parents=True, exist_ok=True)
+                with path.open("a", encoding="utf-8") as stream:
+                    stream.write(message.rstrip() + "\n")
+                return
+            except OSError:
+                continue
