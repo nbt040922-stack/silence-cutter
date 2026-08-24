@@ -20,7 +20,18 @@ from .preview import render_overlay
 
 DEFAULT_AUDIO_PROFILE = {
     "voice_tone_shift": True,
-    "pitch_ratio": 1.03,
+    "pitch_ratio": 1.10,
+    "voice_enhance": True,
+    "highpass_hz": 90,
+    "lowpass_hz": 14000,
+    "noise_reduction": 18,
+    "compressor": {
+        "threshold": 0.12,
+        "ratio": 2.2,
+        "attack": 20,
+        "release": 180,
+        "makeup": 1.2,
+    },
     "sample_rate": 48000,
     "eq": [
         {"frequency_hz": 250, "gain_db": -1.2, "q": 0.8},
@@ -242,10 +253,26 @@ def _command(
             f",asetrate={sample_rate}*{ratio:.9f},aresample={sample_rate},"
             f"atempo={1 / ratio:.9f}"
         )
+        if profile.get("voice_enhance"):
+            compressor = profile.get("compressor") or {}
+            audio += (
+                f",highpass=f={float(profile.get('highpass_hz', 90)):.9g}"
+                f",afftdn=nr={float(profile.get('noise_reduction', 18)):.9g}:nf=-25:tn=1"
+                f",lowpass=f={float(profile.get('lowpass_hz', 14000)):.9g}"
+            )
         for setting in profile["eq"]:
             audio += (
                 f",equalizer=f={setting['frequency_hz']}:t=q:w={setting['q']}:"
                 f"g={setting['gain_db']}"
+            )
+        if profile.get("voice_enhance"):
+            compressor = profile.get("compressor") or {}
+            audio += (
+                f",acompressor=threshold={float(compressor.get('threshold', 0.12)):.9g}"
+                f":ratio={float(compressor.get('ratio', 2.2)):.9g}"
+                f":attack={float(compressor.get('attack', 20)):.9g}"
+                f":release={float(compressor.get('release', 180)):.9g}"
+                f":makeup={float(compressor.get('makeup', 1.2)):.9g}"
             )
         audio += f",alimiter=limit={profile['limiter']}:attack=5:release=50:level=false"
     audio += f",aresample={sample_rate}[aout]"
@@ -402,6 +429,13 @@ def render_format_plan(plan_path: str | Path) -> dict[str, Any]:
         intermediate_render_skipped=direct_source_render,
         audio_effect_enabled=bool(audio_profile["voice_tone_shift"]),
         pitch_ratio=float(audio_profile["pitch_ratio"]),
+        voice_enhance_enabled=bool(audio_profile.get("voice_enhance")),
+        audio_filter_profile={
+            "highpass_hz": audio_profile.get("highpass_hz"),
+            "lowpass_hz": audio_profile.get("lowpass_hz"),
+            "noise_reduction": audio_profile.get("noise_reduction"),
+            "compressor": audio_profile.get("compressor"),
+        },
         eq_settings=audio_profile["eq"],
         final_audio_sample_rate=int(audio_profile["sample_rate"]),
         final_audio_codec="aac", final_audio_bitrate="192k",
@@ -414,9 +448,16 @@ def render_format_plan(plan_path: str | Path) -> dict[str, Any]:
         formatter_part_count=part_count,
         formatter_started_at=started_at, audio_profile=audio_profile,
         intermediate_render_skipped=direct_source_render,
-        audio_effect_enabled=bool(audio_profile["voice_tone_shift"]),
-        pitch_ratio=float(audio_profile["pitch_ratio"]),
-        eq_settings=audio_profile["eq"],
+                        audio_effect_enabled=bool(audio_profile["voice_tone_shift"]),
+                        pitch_ratio=float(audio_profile["pitch_ratio"]),
+                        voice_enhance_enabled=bool(audio_profile.get("voice_enhance")),
+                        audio_filter_profile={
+                            "highpass_hz": audio_profile.get("highpass_hz"),
+                            "lowpass_hz": audio_profile.get("lowpass_hz"),
+                            "noise_reduction": audio_profile.get("noise_reduction"),
+                            "compressor": audio_profile.get("compressor"),
+                        },
+                        eq_settings=audio_profile["eq"],
         final_audio_sample_rate=int(audio_profile["sample_rate"]),
         final_audio_codec="aac", final_audio_bitrate="192k",
         formatter_render_concurrency=render_concurrency,
