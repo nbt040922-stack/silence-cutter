@@ -25,6 +25,7 @@ public sealed class MainViewModel : ViewModelBase, IAsyncDisposable
     private string _manualUrl = string.Empty;
     private string _manualMessage = string.Empty;
     private string _manualPreviewMessage = "Dán URL YouTube để tải metadata";
+    private string _channelsMessage = string.Empty;
     private ManualVideoMetadata? _manualPreviewMetadata;
     private CancellationTokenSource? _manualMetadataCts;
     private CancellationTokenSource? _syncCts;
@@ -64,6 +65,8 @@ public sealed class MainViewModel : ViewModelBase, IAsyncDisposable
         ToggleChannelCommand = new RelayCommand(channel => _ = ToggleChannelAsync(channel as ChannelRecord));
         DashboardPagingCommand = new RelayCommand(value => ChangeDashboardPage(value?.ToString()));
         ChannelsPage.BulkControlRequested += HandleBulkControlRequested;
+        ChannelsPage.AddChannelsRequested += HandleAddChannelsRequested;
+        ChannelsPage.DeleteChannelsRequested += HandleDeleteChannelsRequested;
     }
 
     public MonitorConfig Config { get; private set; }
@@ -123,6 +126,7 @@ public sealed class MainViewModel : ViewModelBase, IAsyncDisposable
     }
     public string ManualMessage { get => _manualMessage; private set => Set(ref _manualMessage, value); }
     public string ManualPreviewMessage { get => _manualPreviewMessage; private set => Set(ref _manualPreviewMessage, value); }
+    public string ChannelsMessage { get => _channelsMessage; private set => Set(ref _channelsMessage, value); }
     public string ManualPreviewTitle => _manualPreviewMetadata?.Title ?? "Chưa có metadata video";
     public string ManualPreviewChannel => _manualPreviewMetadata?.Channel ?? "--";
     public string ManualPreviewDuration => _manualPreviewMetadata?.Duration ?? "--";
@@ -357,6 +361,38 @@ public sealed class MainViewModel : ViewModelBase, IAsyncDisposable
                 : _yt.SetChannelEnabledAsync(channelId, enabled)));
         }
         finally { IsBusy = false; }
+        await RefreshAsync();
+    }
+
+    private async void HandleAddChannelsRequested(IReadOnlyList<ChannelDraft> drafts)
+    {
+        IsBusy = true;
+        try
+        {
+            var results = await Task.WhenAll(drafts.Select(draft => _yt.AddChannelAsync(draft.ChannelUrl, draft.ChannelName)));
+            var added = results.Count(result => result.Success);
+            ChannelsMessage = added == drafts.Count
+                ? $"Đã thêm {added} kênh."
+                : $"Đã thêm {added}/{drafts.Count} kênh; một số dòng bị từ chối.";
+        }
+        finally { IsBusy = false; }
+        await RefreshAsync();
+    }
+
+    private async void HandleDeleteChannelsRequested(IReadOnlyList<string> channelIds)
+    {
+        if (channelIds.Count == 0) return;
+        IsBusy = true;
+        try
+        {
+            var results = await Task.WhenAll(channelIds.Select(channelId => _yt.DeleteChannelAsync(channelId)));
+            var deleted = results.Count(result => result.Success);
+            ChannelsMessage = deleted == channelIds.Count
+                ? $"Đã xóa {deleted} kênh đã chọn."
+                : $"Đã xóa {deleted}/{channelIds.Count} kênh; một số kênh bị từ chối.";
+        }
+        finally { IsBusy = false; }
+        if (ChannelsPage.IsMultiSelect) ChannelsPage.ToggleMultiSelect();
         await RefreshAsync();
     }
 

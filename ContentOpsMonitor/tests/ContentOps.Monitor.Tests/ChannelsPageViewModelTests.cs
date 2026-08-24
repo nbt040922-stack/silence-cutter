@@ -112,6 +112,38 @@ public sealed class ChannelsPageViewModelTests
         Assert.Equal(new[] { "UC_001" }, request.ChannelIds);
     }
 
+    [Fact]
+    public void DeleteCommandIsDisabledWithoutSelectionAndEmitsOnlySelectedChannels()
+    {
+        var page = new ChannelsPageViewModel();
+        page.ReplaceChannels(CreateChannels(3));
+        var requests = new List<IReadOnlyList<string>>();
+        page.DeleteChannelsRequested += ids => requests.Add(ids);
+
+        Assert.False(page.DeleteChannelsCommand.CanExecute(null));
+
+        page.ToggleMultiSelect();
+        page.VisibleRows[1].IsSelected = true;
+        Assert.True(page.DeleteChannelsCommand.CanExecute(null));
+        page.DeleteChannelsCommand.Execute(null);
+
+        Assert.Equal(new[] { "UC_002" }, Assert.Single(requests));
+    }
+
+    [Fact]
+    public void AddFormRequiresLinkAndNameOnEveryRow()
+    {
+        var page = new ChannelsPageViewModel();
+
+        Assert.False(page.SubmitAddChannelsCommand.CanExecute(null));
+        page.AddRows[0].ChannelUrl = "https://youtube.com/@demo";
+        page.AddRows[0].ChannelName = "Demo";
+        Assert.True(page.SubmitAddChannelsCommand.CanExecute(null));
+
+        page.AddDraftRowCommand.Execute(null);
+        Assert.False(page.SubmitAddChannelsCommand.CanExecute(null));
+    }
+
     private static IReadOnlyList<ChannelRecord> CreateChannels(int count) => Enumerable.Range(1, count)
         .Select(index => new ChannelRecord(
             $"UC_{index:000}",

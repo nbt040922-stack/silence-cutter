@@ -13,6 +13,7 @@ public sealed class ChannelsPageViewModel : ViewModelBase
     private int _currentPage = 1;
     private bool _isBulkModalOpen;
     private string _bulkControlKind = "Notification";
+    private bool _isAddModalOpen;
 
     public ChannelsPageViewModel()
     {
@@ -22,16 +23,32 @@ public sealed class ChannelsPageViewModel : ViewModelBase
         BulkEnableCommand = new RelayCommand(_ => RequestBulkControl(true), _ => HasSelection);
         BulkDisableCommand = new RelayCommand(_ => RequestBulkControl(false), _ => HasSelection);
         CloseBulkControlCommand = new RelayCommand(_ => IsBulkModalOpen = false);
+        OpenAddChannelsCommand = new RelayCommand(_ => OpenAddChannels());
+        AddDraftRowCommand = new RelayCommand(_ => AddDraftRow());
+        RemoveDraftRowCommand = new RelayCommand(row => RemoveDraftRow(row as ChannelDraftViewModel), _ => AddRows.Count > 1);
+        CloseAddChannelsCommand = new RelayCommand(_ => IsAddModalOpen = false);
+        SubmitAddChannelsCommand = new RelayCommand(_ => SubmitAddChannels(), _ => CanSubmitAddChannels);
+        DeleteChannelsCommand = new RelayCommand(_ => RequestDeleteChannels(), _ => HasSelection);
+        AddDraftRow();
     }
 
     public ObservableCollection<ChannelRowViewModel> VisibleRows { get; } = [];
+    public ObservableCollection<ChannelDraftViewModel> AddRows { get; } = [];
     public ICommand ToggleMultiSelectCommand { get; }
     public ICommand PagingCommand { get; }
     public ICommand OpenBulkControlCommand { get; }
     public ICommand BulkEnableCommand { get; }
     public ICommand BulkDisableCommand { get; }
     public ICommand CloseBulkControlCommand { get; }
+    public ICommand OpenAddChannelsCommand { get; }
+    public ICommand AddDraftRowCommand { get; }
+    public ICommand RemoveDraftRowCommand { get; }
+    public ICommand CloseAddChannelsCommand { get; }
+    public ICommand SubmitAddChannelsCommand { get; }
+    public ICommand DeleteChannelsCommand { get; }
     public event Action<string, bool, IReadOnlyList<string>>? BulkControlRequested;
+    public event Action<IReadOnlyList<string>>? DeleteChannelsRequested;
+    public event Action<IReadOnlyList<ChannelDraft>>? AddChannelsRequested;
 
     public string SearchText
     {
@@ -75,6 +92,8 @@ public sealed class ChannelsPageViewModel : ViewModelBase
     public IReadOnlyList<ChannelPageItem> PageItems => BuildPageItems();
     public bool HasMultiplePages => PageCount > 1;
     public bool IsBulkModalOpen { get => _isBulkModalOpen; private set => Set(ref _isBulkModalOpen, value); }
+    public bool IsAddModalOpen { get => _isAddModalOpen; private set => Set(ref _isAddModalOpen, value); }
+    public bool CanSubmitAddChannels => AddRows.Count > 0 && AddRows.All(row => row.IsValid);
     public string BulkModalTitle => _bulkControlKind == "Cut" ? "Điều khiển cắt tool" : "Điều khiển thông báo";
     public string BulkModalCount => $"{SelectedCount} kênh đã chọn";
     public bool IsCutControl => _bulkControlKind == "Cut";
@@ -190,6 +209,53 @@ public sealed class ChannelsPageViewModel : ViewModelBase
         ((RelayCommand)OpenBulkControlCommand).RaiseCanExecuteChanged();
         ((RelayCommand)BulkEnableCommand).RaiseCanExecuteChanged();
         ((RelayCommand)BulkDisableCommand).RaiseCanExecuteChanged();
+        ((RelayCommand)DeleteChannelsCommand).RaiseCanExecuteChanged();
+    }
+
+    private void OpenAddChannels()
+    {
+        IsAddModalOpen = true;
+    }
+
+    private void AddDraftRow()
+    {
+        var row = new ChannelDraftViewModel();
+        row.Changed += OnDraftChanged;
+        AddRows.Add(row);
+        ((RelayCommand)RemoveDraftRowCommand).RaiseCanExecuteChanged();
+    }
+
+    private void RemoveDraftRow(ChannelDraftViewModel? row)
+    {
+        if (row is null || AddRows.Count <= 1) return;
+        row.Changed -= OnDraftChanged;
+        AddRows.Remove(row);
+        ((RelayCommand)RemoveDraftRowCommand).RaiseCanExecuteChanged();
+        OnDraftChanged();
+    }
+
+    private void OnDraftChanged()
+    {
+        OnPropertyChanged(nameof(CanSubmitAddChannels));
+        ((RelayCommand)SubmitAddChannelsCommand).RaiseCanExecuteChanged();
+    }
+
+    private void SubmitAddChannels()
+    {
+        var rows = AddRows.Where(row => row.IsValid)
+            .Select(row => new ChannelDraft(row.ChannelUrl.Trim(), row.ChannelName.Trim()))
+            .ToArray();
+        if (rows.Length == 0) return;
+        AddChannelsRequested?.Invoke(rows);
+        IsAddModalOpen = false;
+        foreach (var row in AddRows) row.Changed -= OnDraftChanged;
+        AddRows.Clear();
+        AddDraftRow();
+    }
+
+    private void RequestDeleteChannels()
+    {
+        if (HasSelection) DeleteChannelsRequested?.Invoke(SelectedChannelIds);
     }
 
     private void RequestBulkControl(bool enabled)
@@ -198,6 +264,18 @@ public sealed class ChannelsPageViewModel : ViewModelBase
         BulkControlRequested?.Invoke(_bulkControlKind, enabled, SelectedChannelIds);
         IsBulkModalOpen = false;
     }
+}
+
+public sealed record ChannelDraft(string ChannelUrl, string ChannelName);
+
+public sealed class ChannelDraftViewModel : ViewModelBase
+{
+    private string _channelUrl = string.Empty;
+    private string _channelName = string.Empty;
+    public event Action? Changed;
+    public string ChannelUrl { get => _channelUrl; set { if (Set(ref _channelUrl, value)) Changed?.Invoke(); } }
+    public string ChannelName { get => _channelName; set { if (Set(ref _channelName, value)) Changed?.Invoke(); } }
+    public bool IsValid => !string.IsNullOrWhiteSpace(ChannelUrl) && !string.IsNullOrWhiteSpace(ChannelName);
 }
 
 public sealed class ChannelRowViewModel(ChannelRecord channel) : ViewModelBase

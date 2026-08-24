@@ -63,6 +63,46 @@ public sealed class ApiAdapterTests
     }
 
     [Fact]
+    public async Task YtNotifiAdapterAddsChannelFromUrlAndName()
+    {
+        HttpRequestMessage? received = null;
+        var receivedBody = string.Empty;
+        using var client = new ApiClient(new FakeHandler(async request =>
+        {
+            received = request;
+            receivedBody = await request.Content!.ReadAsStringAsync();
+            return JsonResponse("{}", HttpStatusCode.Created);
+        }));
+        var adapter = new YtNotifiAdapter(client, new Uri("http://127.0.0.1:8787"));
+
+        var result = await adapter.AddChannelAsync("https://youtube.com/@demo", "Demo channel");
+
+        Assert.True(result.Success);
+        Assert.Equal(HttpMethod.Post, received!.Method);
+        Assert.Equal("/api/channels", received.RequestUri!.AbsolutePath);
+        Assert.Contains("https://youtube.com/@demo", receivedBody);
+        Assert.Contains("Demo channel", receivedBody);
+    }
+
+    [Fact]
+    public async Task YtNotifiAdapterDeletesChannelById()
+    {
+        HttpRequestMessage? received = null;
+        using var client = new ApiClient(new FakeHandler(request =>
+        {
+            received = request;
+            return Task.FromResult(JsonResponse("{}"));
+        }));
+        var adapter = new YtNotifiAdapter(client, new Uri("http://127.0.0.1:8787"));
+
+        var result = await adapter.DeleteChannelAsync("UC/demo");
+
+        Assert.True(result.Success);
+        Assert.Equal(HttpMethod.Delete, received!.Method);
+        Assert.Equal("/api/channels/UC%2Fdemo", received.RequestUri!.AbsolutePath);
+    }
+
+    [Fact]
     public async Task ManualLanAdapterCreatesJobWithoutAuthorizationHeader()
     {
         HttpRequestMessage? received = null;

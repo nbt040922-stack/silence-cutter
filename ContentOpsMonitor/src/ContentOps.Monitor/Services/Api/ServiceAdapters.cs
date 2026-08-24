@@ -32,6 +32,12 @@ public sealed class YtNotifiAdapter(ApiClient client, Uri baseUri)
     public Task<ApiResult<JsonElement>> SetChannelCutEnabledAsync(string channelId, bool enabled, CancellationToken ct = default) =>
         client.PatchJsonAsync<JsonElement>(new(baseUri, $"/api/channels/{Uri.EscapeDataString(channelId)}"), new { cut_enabled = enabled }, ct);
 
+    public Task<ApiResult<JsonElement>> AddChannelAsync(string channelUrl, string name, CancellationToken ct = default) =>
+        client.PostJsonAsync<JsonElement>(new(baseUri, "/api/channels"), new { channel_id = channelUrl, name }, cancellationToken: ct);
+
+    public Task<ApiResult<JsonElement>> DeleteChannelAsync(string channelId, CancellationToken ct = default) =>
+        client.DeleteJsonAsync<JsonElement>(new(baseUri, $"/api/channels/{Uri.EscapeDataString(channelId)}"), ct);
+
     public Task<ApiResult<JsonElement>> CancelJobAsync(string jobId, CancellationToken ct = default) =>
         client.PostJsonAsync<JsonElement>(new(baseUri, $"/api/jobs/{Uri.EscapeDataString(jobId)}/cancel"), new { }, cancellationToken: ct);
 
