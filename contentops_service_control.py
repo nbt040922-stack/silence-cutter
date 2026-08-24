@@ -107,6 +107,8 @@ class RealRuntime:
                 self.processes[name] = (pid, _process_start_time(pid) or time.time())
             else:
                 found = _find_process_info(definition.marker, definition.port)
+                if not found:
+                    found = _find_process_info(definition.marker)
                 if found:
                     self.processes[name] = found
 
@@ -205,6 +207,8 @@ class ServiceController:
         if not isinstance(processes, dict):
             return
         found = _find_process_info(definition.marker, definition.port)
+        if not found:
+            found = _find_process_info(definition.marker)
         if not found:
             return
         self._pids[definition.name] = found[0]

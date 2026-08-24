@@ -15,6 +15,22 @@ from contentops_process_bridge import (
 )
 
 
+class ReadyAudioWorker:
+    def __init__(self):
+        self.calls = []
+
+    def health(self):
+        return {"status": "READY", "error": None, "runtime_reuse_count": 0}
+
+    def warm(self):
+        return self.health()
+
+    def process(self, source, report_path, rendered_path):
+        self.calls.append((source, report_path, rendered_path))
+        report_path.write_text("{}", encoding="utf-8")
+        return {"status": "DONE"}
+
+
 def request(source: Path, output: Path, **overrides):
     return {
         "handoff_id": "123", "source_file": str(source),
@@ -146,18 +162,25 @@ def test_bridge_rejects_non_loopback_bind(tmp_path):
 def test_runtime_health_exposes_identity_and_explicit_qwen_state(monkeypatch):
     monkeypatch.delenv("SILENCE_PYTHON", raising=False)
     monkeypatch.setattr("contentops_process_bridge.shutil.which", lambda name: f"C:/bin/{name}.exe")
-    health = runtime_health(host="127.0.0.1", port=8791, qwen_probe=lambda: False)
+    health = runtime_health(
+        host="127.0.0.1", port=8791, qwen_probe=lambda: False,
+        audio_probe=lambda: {"status": "READY", "error": None},
+    )
     assert health["status"] == "READY"
     assert health["formatter_import_health"] == "OK"
-    assert health["qwen_status"] == "ERROR"
+    assert health["qwen_status"] == "DISABLED"
     assert health["enhanced_ready"] is False
+    assert health["audio_model_status"] == "READY"
     assert health["bridge_port"] == 8791
 
 
 def test_runtime_health_detects_wrong_runtime(monkeypatch, tmp_path):
     monkeypatch.setenv("SILENCE_PYTHON", str(tmp_path / "other-python.exe"))
     monkeypatch.setattr("contentops_process_bridge.shutil.which", lambda name: f"C:/bin/{name}.exe")
-    health = runtime_health(host="127.0.0.1", port=8791, qwen_probe=lambda: True)
+    health = runtime_health(
+        host="127.0.0.1", port=8791, qwen_probe=lambda: True,
+        audio_probe=lambda: {"status": "READY", "error": None},
+    )
     assert health["status"] == "WRONG_RUNTIME"
 
 
@@ -170,9 +193,24 @@ def test_runtime_health_reports_missing_pil(monkeypatch):
         return original_import(name, *args, **kwargs)
     monkeypatch.setattr(builtins, "__import__", missing_pil)
     monkeypatch.setattr("contentops_process_bridge.shutil.which", lambda name: f"C:/bin/{name}.exe")
-    health = runtime_health(host="127.0.0.1", port=8791, qwen_probe=lambda: True)
+    health = runtime_health(
+        host="127.0.0.1", port=8791, qwen_probe=lambda: True,
+        audio_probe=lambda: {"status": "READY", "error": None},
+    )
     assert health["status"] == "NOT_READY"
     assert health["formatter_import_health"] == "ERROR"
+
+
+def test_bridge_readiness_uses_audio_worker_when_qwen_is_down(tmp_path, media):
+    source, output = media
+    bridge = ContentOpsProcessBridge(
+        records_path=tmp_path / "records.json",
+        core=lambda *_args, **_kwargs: [output / "PART_1.mp4"],
+        audio_worker=ReadyAudioWorker(), qwen_health=lambda: False,
+    )
+    bridge._health.update(status="READY", readiness="READY")
+    assert bridge.status()["qwen_status"] == "DISABLED"
+    bridge.close()
 
 
 def test_production_core_reuses_existing_planner_and_renderer(tmp_path, media):
@@ -181,8 +219,8 @@ def test_production_core_reuses_existing_planner_and_renderer(tmp_path, media):
     parts = [output / "PART_1.mp4", output / "PART_2.mp4"]
     for part in parts:
         part.write_bytes(b"part")
+    worker = ReadyAudioWorker()
     with (
-        patch("backend.job_runner._pipeline") as process,
         patch("backend.job_runner._run_semantic_stage", return_value={"status": "APPLIED"}) as semantic,
         patch("formatter.planner.plan_done_job", return_value={"formatter_status": "PLANNED"}) as plan,
         patch("formatter.renderer.render_format_plan", return_value={
@@ -190,10 +228,11 @@ def test_production_core_reuses_existing_planner_and_renderer(tmp_path, media):
             "formatted_outputs": [{"path": str(part)} for part in parts],
         }) as render,
     ):
-        result = _production_part_core(source, output, "Video title", job_dir)
+        result = _production_part_core(
+            source, output, "Video title", job_dir, audio_worker=worker,
+        )
     assert result == parts
-    assert len(process.call_args.args[0]["id"]) == 32
-    assert process.call_args.args[2] == source
+    assert worker.calls[0][0] == source
     semantic.assert_not_called()
     assert plan.call_count == render.call_count == 1
     job = json.loads((job_dir / "job.json").read_text(encoding="utf-8"))
@@ -214,7 +253,6 @@ def test_enhanced_failure_falls_open_to_normal_core(tmp_path, media):
     with (
         patch("enhanced_content_flow.run_enhanced_content_flow", side_effect=EnhancedFlowSkipped("no three parts")) as enhanced,
         patch("backend.job_runner._job_path", return_value=canonical_job),
-        patch("backend.job_runner._pipeline", side_effect=run_pipeline),
         patch("backend.job_runner._run_semantic_stage", return_value={"status": "APPLIED"}) as semantic,
         patch("formatter.planner.plan_done_job", return_value={"formatter_status": "PLANNED"}),
         patch("formatter.renderer.render_format_plan", return_value={
@@ -222,14 +260,15 @@ def test_enhanced_failure_falls_open_to_normal_core(tmp_path, media):
         }),
     ):
         result = _production_part_core(
-            source, output, "Video title", job_dir, enhanced_content_selection=True,
+            source, output, "Video title", job_dir,
+            enhanced_content_selection=True, audio_worker=ReadyAudioWorker(),
         )
     assert result == parts
     enhanced.assert_not_called()
     job = json.loads((job_dir / "job.json").read_text(encoding="utf-8"))
-    assert job["enhanced_selection_status"] == "DEFERRED_TO_FORMATTER_QWEN"
+    assert job["enhanced_selection_status"] == "DISABLED_QWEN"
     assert job["effective_processing_mode"] == "NORMAL"
-    assert "timestamped formatter parts" in job["enhanced_fallback_reason"]
+    assert "Qwen is disabled" in job["enhanced_fallback_reason"]
     assert canonical_job.is_file()
     semantic.assert_not_called()
 
@@ -243,7 +282,6 @@ def test_enhanced_infrastructure_error_falls_open_to_normal_core(tmp_path, media
     from enhanced_content_flow import EnhancedFlowError
     with (
         patch("enhanced_content_flow.run_enhanced_content_flow", side_effect=EnhancedFlowError("qwen timeout")),
-        patch("backend.job_runner._pipeline"),
         patch("backend.job_runner._run_semantic_stage", return_value={"status": "APPLIED"}) as semantic,
         patch("formatter.planner.plan_done_job", return_value={"formatter_status": "PLANNED"}),
         patch("formatter.renderer.render_format_plan", return_value={
@@ -251,13 +289,14 @@ def test_enhanced_infrastructure_error_falls_open_to_normal_core(tmp_path, media
         }),
     ):
         result = _production_part_core(
-            source, output, "Video title", job_dir, enhanced_content_selection=True,
+            source, output, "Video title", job_dir,
+            enhanced_content_selection=True, audio_worker=ReadyAudioWorker(),
         )
     assert result == parts
     job = json.loads((job_dir / "job.json").read_text(encoding="utf-8"))
-    assert job["enhanced_selection_status"] == "DEFERRED_TO_FORMATTER_QWEN"
+    assert job["enhanced_selection_status"] == "DISABLED_QWEN"
     assert job["effective_processing_mode"] == "NORMAL"
-    assert "timestamped formatter parts" in job["enhanced_fallback_reason"]
+    assert "Qwen is disabled" in job["enhanced_fallback_reason"]
     semantic.assert_not_called()
 
 

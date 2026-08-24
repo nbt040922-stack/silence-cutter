@@ -70,7 +70,10 @@ def _git_build() -> str:
         return "dev"
 
 
-def runtime_health(*, host: str, port: int, qwen_probe: Callable[[], bool] = qwen_ready) -> dict[str, Any]:
+def runtime_health(
+    *, host: str, port: int, qwen_probe: Callable[[], bool] = qwen_ready,
+    audio_probe: Callable[[], dict[str, Any]] | None = None,
+) -> dict[str, Any]:
     formatter_import = "OK"
     formatter_error = None
     try:
@@ -81,10 +84,14 @@ def runtime_health(*, host: str, port: int, qwen_probe: Callable[[], bool] = qwe
         formatter_error = f"{type(exc).__name__}: {exc}"[-300:]
     ffmpeg = shutil.which("ffmpeg")
     ffprobe = shutil.which("ffprobe")
-    qwen_ok = bool(qwen_probe())
+    del qwen_probe  # Qwen is intentionally outside the processing readiness path.
+    audio = audio_probe() if audio_probe is not None else {"status": "READY", "error": None}
     expected_python = os.getenv("SILENCE_PYTHON")
     runtime_ok = not expected_python or Path(sys.executable).resolve() == Path(expected_python).resolve()
-    base_ready = bool(runtime_ok and formatter_import == "OK" and ffmpeg and ffprobe and ROOT.is_dir())
+    base_ready = bool(
+        runtime_ok and formatter_import == "OK" and ffmpeg and ffprobe and ROOT.is_dir()
+        and audio.get("status") == "READY"
+    )
     return {
         "status": "READY" if base_ready else ("WRONG_RUNTIME" if not runtime_ok else "NOT_READY"),
         "readiness": "READY" if base_ready else ("WRONG_RUNTIME" if not runtime_ok else "NOT_READY"),
@@ -96,9 +103,13 @@ def runtime_health(*, host: str, port: int, qwen_probe: Callable[[], bool] = qwe
         "bridge_pid": os.getpid(),
         "bridge_build": _git_build(),
         "qwen_endpoint": QWEN_ENDPOINT,
-        "qwen_status": "READY" if qwen_ok else "ERROR",
-        "qwen_health": qwen_ok,
-        "enhanced_ready": bool(base_ready and qwen_ok),
+        "qwen_status": "DISABLED",
+        "qwen_health": False,
+        "enhanced_ready": False,
+        "audio_model_status": audio.get("status"),
+        "audio_model_error": audio.get("error"),
+        "audio_model_device": audio.get("active_device"),
+        "audio_runtime_reuse_count": audio.get("runtime_reuse_count", 0),
         "formatter_import": formatter_import,
         "formatter_import_health": formatter_import,
         "formatter_error": formatter_error,
@@ -110,13 +121,14 @@ def runtime_health(*, host: str, port: int, qwen_probe: Callable[[], bool] = qwe
 def _production_part_core(
     source: Path, output_dir: Path, title: str, job_dir: Path, *,
     enhanced_content_selection: bool = False,
+    audio_worker: Any | None = None,
 ) -> list[Path]:
     enhanced_status = "NOT_REQUESTED"
     enhanced_reason = None
     if enhanced_content_selection:
-        enhanced_status = "DEFERRED_TO_FORMATTER_QWEN"
-        enhanced_reason = "Qwen inspection is deferred until timestamped formatter parts exist"
-    from backend.job_runner import _apply_qwen_part_policy, _job_path, _pipeline
+        enhanced_status = "DISABLED_QWEN"
+        enhanced_reason = "Qwen is disabled; audio-only formatting continues"
+    from backend.job_runner import _job_path
     from semantic_cleaner.cleaner import write_skipped_artifact
     from formatter.planner import plan_done_job
     from formatter.renderer import render_format_plan
@@ -140,10 +152,17 @@ def _production_part_core(
     canonical_job_path.write_text(
         json.dumps(analysis_job, ensure_ascii=False, indent=2) + "\n", encoding="utf-8",
     )
+    if audio_worker is None:
+        from audio_worker import AudioAnalysisWorker
+        audio_worker = AudioAnalysisWorker()
+        audio_worker.warm()
+    rendered = job_dir / "rendered.mp4"
     try:
-        _pipeline(analysis_job, job_dir, source)
+        audio_worker.process(source, report, rendered)
     except Exception as exc:
-        raise ProcessingStageError("FALLBACK", exc) from exc
+        raise ProcessingStageError("AUDIO_ANALYSIS", exc) from exc
+    if not report.is_file():
+        raise ProcessingStageError("AUDIO_ANALYSIS", RuntimeError("audio analysis completed without report"))
     write_skipped_artifact(
         job_dir / "semantic_segments.json",
         reason="deferred_to_bounded_qwen_part_inspection_before_formatter",
@@ -180,7 +199,6 @@ def _production_part_core(
         raise ProcessingStageError("PLANNER", exc) from exc
     if plan["formatter_status"] != "PLANNED":
         raise RequestError(f"FORMATTER_{plan['formatter_status']}")
-    plan = _apply_qwen_part_policy(plan, job_dir)
     plan_path.write_text(
         json.dumps(plan, ensure_ascii=False, indent=2) + "\n", encoding="utf-8",
     )
@@ -201,15 +219,25 @@ class ContentOpsProcessBridge:
         port: int = 8791,
         host: str = LOOPBACK,
         max_concurrency: int = 1,
-        core: Callable[[Path, Path, str, Path], list[Path]] = _production_part_core,
+        core: Callable[[Path, Path, str, Path], list[Path]] | None = None,
         qwen_health: Callable[[], bool] = qwen_ready,
+        audio_worker: Any | None = None,
     ) -> None:
         if host != LOOPBACK:
             raise ValueError("Content Ops bridge must bind to 127.0.0.1")
         data_root = Path(os.getenv("SILENCE_CUTTER_DATA_DIR", ROOT)).expanduser().resolve()
         self.records_path = records_path or data_root / "workspace" / "contentops-process-jobs.json"
         self.report_dir = self.records_path.parent / "contentops-process-reports"
-        self.port, self.host, self.core = port, host, core
+        self.port, self.host = port, host
+        self._uses_audio_worker = core is None
+        if self._uses_audio_worker:
+            from functools import partial
+            from audio_worker import AudioAnalysisWorker
+            self.audio_worker = audio_worker or AudioAnalysisWorker()
+            self.core = partial(_production_part_core, audio_worker=self.audio_worker)
+        else:
+            self.audio_worker = audio_worker
+            self.core = core
         self.qwen_health = qwen_health
         self.records: dict[str, dict[str, Any]] = {}
         self._lock = threading.RLock()
@@ -217,7 +245,10 @@ class ContentOpsProcessBridge:
         self._executor = ThreadPoolExecutor(max_workers=1, thread_name_prefix="contentops-process")
         self._server: ThreadingHTTPServer | None = None
         self._server_thread: threading.Thread | None = None
-        self._health = runtime_health(host=host, port=port, qwen_probe=qwen_health)
+        self._health = runtime_health(
+            host=host, port=port, qwen_probe=qwen_health,
+            audio_probe=self.audio_worker.health if self._uses_audio_worker else None,
+        )
         self._load()
 
     def _load(self) -> None:
@@ -323,6 +354,7 @@ class ContentOpsProcessBridge:
                 "waiting_jobs": len(queue), "queue": queue,
                 "processing_concurrency": self.processing_concurrency,
                 "qwen_status": self._health.get("qwen_status"),
+                "audio_model_status": self._health.get("audio_model_status"),
             }
 
     def get(self, external_id: str) -> dict[str, Any] | None:
@@ -424,7 +456,12 @@ class ContentOpsProcessBridge:
     def start(self) -> tuple[str, int]:
         if self._server:
             return self._server.server_address
-        self._health = runtime_health(host=self.host, port=self.port, qwen_probe=self.qwen_health)
+        if self._uses_audio_worker:
+            self.audio_worker.warm()
+        self._health = runtime_health(
+            host=self.host, port=self.port, qwen_probe=self.qwen_health,
+            audio_probe=self.audio_worker.health if self._uses_audio_worker else None,
+        )
         print(json.dumps(self._health, ensure_ascii=False), flush=True)
         self.restore()
         bridge = self
@@ -446,6 +483,7 @@ class ContentOpsProcessBridge:
                 if path == "/health":
                     bridge._health = runtime_health(
                         host=bridge.host, port=bridge.port, qwen_probe=bridge.qwen_health,
+                        audio_probe=bridge.audio_worker.health if bridge._uses_audio_worker else None,
                     )
                     status = 200 if bridge._health["status"] == "READY" else 503
                     return self.send_json(status, bridge._health | bridge.status())
@@ -467,7 +505,7 @@ class ContentOpsProcessBridge:
                     created, record = bridge.submit(json.loads(self.rfile.read(size)))
                     self.send_json(201 if created else 200, record)
                 except RequestError as exc:
-                    status = 503 if exc.code in {"QWEN_WORKER_UNAVAILABLE", "BRIDGE_NOT_READY"} else 422 if exc.code in {"SOURCE_FILE_MISSING", "NAS_UNAVAILABLE"} else 400
+                    status = 503 if exc.code in {"AUDIO_MODEL_NOT_READY", "BRIDGE_NOT_READY"} else 422 if exc.code in {"SOURCE_FILE_MISSING", "NAS_UNAVAILABLE"} else 400
                     self.send_json(status, {"error": exc.code})
                 except (ValueError, TypeError, json.JSONDecodeError):
                     self.send_json(400, {"error": "INVALID_REQUEST"})

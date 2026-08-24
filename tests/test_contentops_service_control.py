@@ -74,3 +74,28 @@ def test_stop_refreshes_stale_adopted_pid(monkeypatch):
     controller.stop("Manual LAN API")
 
     assert runtime.stopped == [("Manual LAN API", 25112)]
+
+
+def test_stop_refreshes_qwen_supervisor_when_worker_owns_port(monkeypatch):
+    import contentops_service_control
+
+    runtime = FakeRuntime()
+    runtime.processes = {}
+    runtime.running["Qwen"] = True
+    runtime.owned.add("Qwen")
+    controller = ServiceController(runtime)
+    controller._pids["Qwen"] = 17468
+    calls = []
+
+    def find_process(marker, port=None):
+        calls.append((marker, port))
+        if port is not None:
+            return None
+        return (27748, 123.0)
+
+    monkeypatch.setattr(contentops_service_control, "_find_process_info", find_process)
+
+    controller.stop("Qwen")
+
+    assert runtime.stopped == [("Qwen", 27748)]
+    assert calls == [("qwen_worker.supervisor", 8792), ("qwen_worker.supervisor", None)]
