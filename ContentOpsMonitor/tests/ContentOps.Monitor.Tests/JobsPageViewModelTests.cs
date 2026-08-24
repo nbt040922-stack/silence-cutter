@@ -64,6 +64,23 @@ public sealed class JobsPageViewModelTests
     }
 
     [Fact]
+    public void DataRefreshKeepsCurrentPageAndSelectedJobById()
+    {
+        var page = new JobsPageViewModel(usePreviewData: false);
+        var initial = Enumerable.Range(1, 12).Select(index => Job($"{index}", $"Job {index}", "RUNNING")).ToArray();
+        page.ReplaceJobs(initial);
+        page.PagingCommand.Execute("2");
+        page.SelectJobCommand.Execute(page.VisibleRows[0]);
+
+        page.ReplaceJobs(initial.Select(job => job.Id == "11" ? job with { Title = "Updated job 11", Progress = 72 } : job));
+
+        Assert.Equal(2, page.CurrentPage);
+        Assert.Equal("11", page.SelectedJob!.Id);
+        Assert.Equal("Updated job 11", page.SelectedJob.Title);
+        Assert.Equal(72, page.SelectedJob.Progress);
+    }
+
+    [Fact]
     public void RunningNavigationUsesApprovedRunningPreview()
     {
         var page = new JobsPageViewModel();

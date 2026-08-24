@@ -13,6 +13,7 @@ namespace ContentOps.Monitor.ViewModels;
 
 public sealed class MainViewModel : ViewModelBase, IAsyncDisposable
 {
+    private static readonly TimeSpan LiveSyncInterval = TimeSpan.FromSeconds(2);
     private readonly MonitorConfigStore _configStore = new();
     private readonly ApiClient _apiClient = new();
     private readonly YtNotifiAdapter _yt;
@@ -44,7 +45,7 @@ public sealed class MainViewModel : ViewModelBase, IAsyncDisposable
         _serviceControl = new(_apiClient, new Uri(Config.ServiceControlBaseUrl));
         _alertStore = new(Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData), "ContentOps", "Monitor", "alerts.json"));
         var definitions = Config.Endpoints.Values.Select(endpoint => new ServiceDefinition(endpoint.Name, endpoint.Port, endpoint.BaseUrl)).ToArray();
-        _health = new(definitions, (service, ct) => ServiceAdapters.GetHealthAsync(_apiClient, service, ct), Config.PollInterval);
+        _health = new(definitions, (service, ct) => ServiceAdapters.GetHealthAsync(_apiClient, service, ct), LiveSyncInterval);
         _health.SnapshotChanged += UpdateServices;
         _health.AlertRaised += AddAlert;
         NavigateCommand = new RelayCommand(page => NavigateItem(page as NavigationItem));
@@ -220,7 +221,7 @@ public sealed class MainViewModel : ViewModelBase, IAsyncDisposable
             {
                 Jobs.Clear(); foreach (var job in allJobs) Jobs.Add(job);
                 JobsPage.ReplaceJobs(allJobs);
-                RebuildVisibleJobs();
+                RebuildVisibleJobs(applyJobsPageFilter: false);
                 RebuildDashboardPages();
                 OnPropertyChanged(nameof(TotalJobsToday)); OnPropertyChanged(nameof(RunningJobs)); OnPropertyChanged(nameof(QueuedJobs)); OnPropertyChanged(nameof(CompletedJobs)); OnPropertyChanged(nameof(FailedJobs));
             }
@@ -242,7 +243,7 @@ public sealed class MainViewModel : ViewModelBase, IAsyncDisposable
         {
             while (!cancellationToken.IsCancellationRequested)
             {
-                await Task.Delay(Config.PollInterval, cancellationToken);
+                await Task.Delay(LiveSyncInterval, cancellationToken);
                 await RefreshAsync();
             }
         }
@@ -251,7 +252,7 @@ public sealed class MainViewModel : ViewModelBase, IAsyncDisposable
 
     private void ApplyJobFilter(string filter) { JobFilter = filter; RebuildVisibleJobs(); Navigate("Jobs"); }
 
-    private void RebuildVisibleJobs()
+    private void RebuildVisibleJobs(bool applyJobsPageFilter = true)
     {
         var rows = JobFilter switch
         {
@@ -265,7 +266,7 @@ public sealed class MainViewModel : ViewModelBase, IAsyncDisposable
         };
         ActiveJobs.Clear(); foreach (var row in Jobs.Where(job => IsStatus(job, "PROCESSING", "RUNNING", "ANALYZING", "QUEUED", "WAITING"))) ActiveJobs.Add(row);
         VisibleJobs.Clear(); foreach (var row in rows) VisibleJobs.Add(row);
-        JobsPage.ApplyNavigationFilter(JobFilter);
+        if (applyJobsPageFilter) JobsPage.ApplyNavigationFilter(JobFilter);
         OnPropertyChanged(nameof(PageTitle));
         OnPropertyChanged(nameof(PageSubtitle));
         OnPropertyChanged(nameof(ActiveJobs));

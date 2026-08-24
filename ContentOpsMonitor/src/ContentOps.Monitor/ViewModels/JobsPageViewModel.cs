@@ -108,12 +108,17 @@ public sealed class JobsPageViewModel : ViewModelBase
     public void ReplaceJobs(IEnumerable<JobRecord> jobs)
     {
         var records = jobs.ToArray();
+        var selectedId = SelectedJob?.Id;
+        var currentPage = _currentPage;
         IsPreviewData = _usePreviewData || records.Length == 0;
         _rows.Clear();
         if (IsPreviewData && IsStatusView) _rows.AddRange(StatusPreviewJobs(_statusViewKind));
         else _rows.AddRange((IsPreviewData ? PreviewJobs() : records).Select(record => new JobRowViewModel(record)));
-        _currentPage = 1;
-        RebuildPage();
+        _currentPage = currentPage;
+        RebuildPage(selectFirstIfMissing: false);
+        SelectedJob = selectedId is null
+            ? VisibleRows.FirstOrDefault()
+            : _rows.FirstOrDefault(row => row.Id == selectedId) ?? VisibleRows.FirstOrDefault();
         NotifySummary();
     }
 
@@ -194,12 +199,12 @@ public sealed class JobsPageViewModel : ViewModelBase
         RebuildPage();
     }
 
-    private void RebuildPage()
+    private void RebuildPage(bool selectFirstIfMissing = true)
     {
         _currentPage = Math.Clamp(_currentPage, 1, PageCount);
         VisibleRows.Clear();
         foreach (var row in FilteredRows.Skip((_currentPage - 1) * PageSize).Take(PageSize)) VisibleRows.Add(row);
-        if (SelectedJob is null || !VisibleRows.Contains(SelectedJob)) SelectedJob = VisibleRows.FirstOrDefault();
+        if (selectFirstIfMissing && (SelectedJob is null || !VisibleRows.Contains(SelectedJob))) SelectedJob = VisibleRows.FirstOrDefault();
         OnPropertyChanged(nameof(FilteredCount));
         OnPropertyChanged(nameof(PageCount));
         OnPropertyChanged(nameof(CurrentPage));
