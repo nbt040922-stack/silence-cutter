@@ -50,6 +50,14 @@ class FormatterRendererTests(unittest.TestCase):
         self.assertEqual([(item["start"], item["end"]) for item in jobs], [(0, 1), (1, 2), (2, 3)])
         self.assertEqual([item["label"] for item in jobs], ["パート1", "パート2", "パート3"])
 
+    def test_clean_video_jobs_apply_head_trim_offset(self):
+        with tempfile.TemporaryDirectory() as directory:
+            plan = make_plan(Path(directory), duration=4, part_count=3)
+            plan["trim_start_seconds"] = 1
+            jobs = build_render_jobs(plan, Path(directory) / "formatted")
+        self.assertEqual(jobs[0]["source_segments"], [{"start": 1.0, "end": 2.333333333333333}])
+        self.assertEqual(jobs[-1]["source_segments"], [{"start": 3.6666666666666665, "end": 5.0}])
+
     def test_renderer_creates_exactly_configured_two_parts(self):
         with tempfile.TemporaryDirectory() as directory:
             jobs = build_render_jobs(

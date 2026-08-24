@@ -8,6 +8,7 @@ from formatter.planner import (
     PART_BANNER, TITLE_BANNER, VIDEO_PLACEMENT,
     build_layout, center_crop_geometry, detect_title_language,
     fit_title, formatter_status, plan_done_job, plan_parts,
+    trim_render_segments, trim_seconds_for_duration,
 )
 
 
@@ -37,37 +38,42 @@ class FormatterTests(unittest.TestCase):
         self.assertIn(400, [item["clean_timestamp"] for item in selected])
 
     def test_part_count_thresholds(self):
-        expected = {
-            540.0: 2,
-            599.9: 2,
-            600.0: 3,
-            900.0: 3,
-            1200.0: 3,
-        }
-        for duration, part_count in expected.items():
+        for duration in (540.0, 599.9, 600.0, 900.0, 1200.0):
             with self.subTest(duration=duration):
                 parts, _ = plan_parts(
                     duration, [segment(0, duration, 0, duration)]
                 )
-                self.assertEqual(len(parts), part_count)
+                self.assertEqual(len(parts), 3)
         self.assertEqual(formatter_status(1200.1), "PLANNED")
+
+    def test_trim_policy_uses_one_or_two_minutes_per_side(self):
+        self.assertEqual(trim_seconds_for_duration(599), 60)
+        self.assertEqual(trim_seconds_for_duration(600), 60)
+        self.assertEqual(trim_seconds_for_duration(1200), 60)
+        self.assertEqual(trim_seconds_for_duration(1201), 120)
+
+    def test_trim_mapping_remaps_clean_timeline_after_head_and_tail(self):
+        trimmed = trim_render_segments(
+            [segment(0, 600, 10, 610)], trim_start=60, trim_end=60,
+        )
+        self.assertEqual(trimmed, [segment(0, 480, 70, 550)])
 
     def test_two_part_plan_prefers_unequal_natural_boundary(self):
         parts, candidates = plan_parts(540, [
             segment(0, 220, 0, 220),
             segment(220, 540, 226, 546),
-        ])
+        ], part_count=2)
         self.assertEqual([item["duration"] for item in parts], [220, 320])
         selected = [item for item in candidates if item["selected"]]
         self.assertEqual(len(selected), 1)
         self.assertEqual(selected[0]["type"], "edit_junction")
 
-    def test_two_part_localized_labels_stop_at_two(self):
+    def test_localized_labels_cover_three_parts(self):
         parts, _ = plan_parts(540, [segment(0, 540, 0, 540)])
         from formatter.planner import PART_LABELS
         for part in parts:
             part["label"] = PART_LABELS["ja"].format(number=part["index"])
-        self.assertEqual([item["label"] for item in parts], ["パート1", "パート2"])
+        self.assertEqual([item["label"] for item in parts], ["パート1", "パート2", "パート3"])
 
     def test_done_japanese_job_persists_two_part_count_and_labels(self):
         with tempfile.TemporaryDirectory() as directory:
@@ -93,8 +99,11 @@ class FormatterTests(unittest.TestCase):
                     root, output_path=root / "format_plan.json",
                     preview_path=root / "part1_preview.png",
                 )
-        self.assertEqual(plan["part_count"], 2)
-        self.assertEqual([part["label"] for part in plan["parts"]], ["パート1", "パート2"])
+        self.assertEqual(plan["part_count"], 3)
+        self.assertEqual(plan["trim_start_seconds"], 60)
+        self.assertEqual(plan["trim_end_seconds"], 60)
+        self.assertEqual(plan["clean_video_duration"], 420)
+        self.assertEqual([part["label"] for part in plan["parts"]], ["パート1", "パート2", "パート3"])
 
     def test_analysis_only_job_plans_directly_from_source_keep_mapping(self):
         with tempfile.TemporaryDirectory() as directory:
@@ -130,10 +139,10 @@ class FormatterTests(unittest.TestCase):
         self.assertTrue(plan["direct_source_render"])
         self.assertIsNone(plan["clean_video_path"])
         self.assertEqual(plan["source_video_path"], str(source))
-        self.assertEqual(plan["clean_video_duration"], 540)
+        self.assertEqual(plan["clean_video_duration"], 420)
         self.assertEqual(plan["render_segments"], [
-            {"output_start": 0, "output_end": 200, "source_start": 10, "source_end": 210},
-            {"output_start": 200, "output_end": 540, "source_start": 220, "source_end": 560},
+            {"output_start": 0, "output_end": 140, "source_start": 70, "source_end": 210},
+            {"output_start": 140, "output_end": 420, "source_start": 220, "source_end": 500},
         ])
 
     def test_long_video_has_no_duration_only_review_gate(self):

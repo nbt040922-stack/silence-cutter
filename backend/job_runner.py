@@ -1684,7 +1684,7 @@ def _process_ready_job(
         rewrite = rewrite_title_once(
             job_dir, str(job["title"]), output_folder,
             source_id=str(job.get("video_id") or job["id"]),
-            part_count=2 if float(clean_duration or 0) < 600 else 3,
+            part_count=3,
             allow_qwen=False,
         )
         report_data.update(

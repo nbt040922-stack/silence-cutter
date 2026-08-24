@@ -332,6 +332,41 @@ def clean_mapping(keep_intervals: list[dict[str, float]]) -> list[dict[str, floa
     return mapping
 
 
+def trim_seconds_for_duration(duration: float) -> float:
+    """Return the symmetric head/tail trim for a source timeline."""
+    if duration <= 0:
+        raise ValueError("video duration must be positive")
+    return 120.0 if duration > 1200.0 else 60.0
+
+
+def trim_render_segments(
+    segments: list[dict[str, float]], *, trim_start: float, trim_end: float,
+) -> list[dict[str, float]]:
+    """Clip and remap a clean-to-source mapping after symmetric trimming."""
+    if trim_start < 0 or trim_end < 0:
+        raise ValueError("trim durations cannot be negative")
+    if not segments:
+        return []
+    original_end = max(float(item["output_end"]) for item in segments)
+    window_start, window_end = trim_start, original_end - trim_end
+    if window_end <= window_start:
+        raise ValueError("head/tail trim removes the complete video")
+    trimmed = []
+    for item in segments:
+        left = max(float(item["output_start"]), window_start)
+        right = min(float(item["output_end"]), window_end)
+        if right <= left:
+            continue
+        source_start = float(item["source_start"]) + left - float(item["output_start"])
+        trimmed.append({
+            "output_start": left - window_start,
+            "output_end": right - window_start,
+            "source_start": source_start,
+            "source_end": source_start + right - left,
+        })
+    return trimmed
+
+
 def _junction_candidates(
     clean_duration: float, segments: list[dict[str, float]], part_count: int,
 ) -> list[dict[str, Any]]:
@@ -430,7 +465,7 @@ def plan_parts(
 ) -> tuple[list[dict[str, Any]], list[dict[str, Any]]]:
     if clean_duration <= 0:
         raise ValueError("clean video duration must be positive")
-    part_count = part_count or (2 if clean_duration < 600 else 3)
+    part_count = part_count or 3
     if part_count not in {2, 3}:
         raise ValueError("formatter part count must be 2 or 3")
     segments = sorted(render_segments, key=lambda item: item["output_start"])
@@ -531,11 +566,18 @@ def plan_done_job(
     )
     if not render_segments:
         raise ValueError("pipeline report contains no final render timeline mapping")
-    clean_duration = float(
+    original_clean_duration = float(
         report.get("output_duration") or report["expected_output_duration"]
     )
+    requested_trim = trim_seconds_for_duration(original_clean_duration)
+    trim_start = min(requested_trim, max(0.0, (original_clean_duration - 1.0) / 2))
+    trim_end = trim_start
+    clean_duration = original_clean_duration - trim_start - trim_end
+    render_segments = trim_render_segments(
+        render_segments, trim_start=trim_start, trim_end=trim_end,
+    )
     status = formatter_status(clean_duration, format_anyway)
-    part_count = 2 if clean_duration < 600 else 3
+    part_count = 3
     from .title_rewrite import read_title_rewrite
     rewrite = read_title_rewrite(job_dir, str(job["title"]))
     # Use the accepted rewrite for the rendered title banner.  The original
@@ -569,6 +611,9 @@ def plan_done_job(
         "direct_source_render": not clean_video.is_file(),
         "render_segments": render_segments,
         "input_duration": report.get("input_duration"),
+        "original_clean_video_duration": original_clean_duration,
+        "trim_start_seconds": trim_start,
+        "trim_end_seconds": trim_end,
         "clean_video_duration": clean_duration,
         "part_boundaries": selected_boundaries,
         "parts": parts,

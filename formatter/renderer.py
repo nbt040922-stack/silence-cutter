@@ -186,6 +186,9 @@ def build_render_jobs(plan: dict[str, Any], output_dir: Path) -> list[dict[str, 
             map_clean_range_to_source(start, end, plan.get("render_segments") or [])
             if plan.get("direct_source_render") else [{"start": start, "end": end}]
         )
+        if not plan.get("direct_source_render"):
+            offset = float(plan.get("trim_start_seconds") or 0.0)
+            source_segments = [{"start": start + offset, "end": end + offset}]
         jobs.append({
             "index": expected_index,
             "label": str(part["label"]),
