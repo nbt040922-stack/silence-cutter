@@ -1,6 +1,169 @@
 from lan_job_api import authorize, is_local_address, validate_submission
 
 
+def test_discovery_selects_one_unseen_highest_view_video_per_channel(monkeypatch, tmp_path):
+    from datetime import datetime, timezone
+    import json
+    import lan_job_api
+
+    monkeypatch.setenv("SILENCE_CUTTER_DATA_DIR", str(tmp_path))
+    rows = [
+        {"id": "low", "url": "https://youtu.be/low", "title": "Low", "channel": "A", "channel_id": "UCA", "upload_date": "20260101", "view_count": 100},
+        {"id": "high", "url": "https://youtu.be/high", "title": "High", "channel": "A", "channel_id": "UCA", "upload_date": "20260201", "view_count": 900},
+    ]
+    monkeypatch.setattr(lan_job_api, "_backend", lambda: type("Backend", (), {"_yt_dlp_command": staticmethod(lambda: ["yt-dlp"]), "list_jobs": staticmethod(lambda: [])})())
+    monkeypatch.setattr(lan_job_api.subprocess, "run", lambda *args, **kwargs: type("Result", (), {"returncode": 0, "stdout": "\n".join(json.dumps(row) for row in rows), "stderr": ""})())
+    created = []
+    monkeypatch.setattr(lan_job_api, "create_remote_job", lambda payload, **_: created.append(payload["url"]) or {"job_id": "job-high", "status": "QUEUED"})
+
+    result = lan_job_api.discover_channel_jobs(
+        ["https://www.youtube.com/@channel/videos"],
+        now=datetime(2026, 8, 24, tzinfo=timezone.utc),
+    )
+
+    assert created == ["https://youtu.be/high"]
+    assert result["created"][0]["video_id"] == "high"
+    assert json.loads((tmp_path / "channel-discovery-history.json").read_text())['high']['job_id'] == "job-high"
+
+
+def test_channel_scan_uses_fast_flat_playlist_mode(monkeypatch):
+    import json
+    import lan_job_api
+
+    command_seen = []
+    monkeypatch.setattr(lan_job_api, "_backend", lambda: type("Backend", (), {
+        "_yt_dlp_command": staticmethod(lambda: ["yt-dlp"]),
+    })())
+
+    def run(command, **kwargs):
+        command_seen.extend(command)
+        return type("Result", (), {
+            "returncode": 0,
+            "stdout": json.dumps({"id": "fast", "view_count": 12, "upload_date": "20260101"}),
+            "stderr": "",
+        })()
+
+    monkeypatch.setattr(lan_job_api.subprocess, "run", run)
+    lan_job_api.fetch_channel_candidates(
+        "https://youtube.com/@demo/videos",
+        since=lan_job_api.datetime(2025, 1, 1, tzinfo=lan_job_api.timezone.utc),
+        until=lan_job_api.datetime(2026, 1, 1, tzinfo=lan_job_api.timezone.utc),
+        limit=10,
+    )
+
+    assert "--flat-playlist" in command_seen
+
+
+def test_channel_scan_checks_publish_date_after_popular_view_order(monkeypatch):
+    import json
+    import lan_job_api
+
+    commands = []
+    monkeypatch.setattr(lan_job_api, "_backend", lambda: type("Backend", (), {
+        "_yt_dlp_command": staticmethod(lambda: ["yt-dlp"]),
+    })())
+
+    def run(command, **kwargs):
+        commands.append(command)
+        if "--flat-playlist" in command:
+            rows = [
+                {"id": "popular-old", "url": "https://youtu.be/popular-old", "view_count": 900},
+                {"id": "recent", "url": "https://youtu.be/recent", "view_count": 100},
+            ]
+            output = "\n".join(json.dumps(row) for row in rows)
+        else:
+            output = "20200101\n" if "popular-old" in command[-1] else "20260101\n"
+        return type("Result", (), {"returncode": 0, "stdout": output, "stderr": ""})()
+
+    monkeypatch.setattr(lan_job_api.subprocess, "run", run)
+    candidates = lan_job_api.fetch_channel_candidates(
+        "https://youtube.com/@demo/videos",
+        since=lan_job_api.datetime(2025, 1, 1, tzinfo=lan_job_api.timezone.utc),
+        until=lan_job_api.datetime(2026, 1, 1, tzinfo=lan_job_api.timezone.utc),
+    )
+
+    assert [item["video_id"] for item in candidates] == ["recent"]
+    assert "sort=p" in commands[0][-1]
+    assert "--flat-playlist" not in commands[1]
+
+
+def test_discovery_skips_history_and_reports_channel_errors(monkeypatch, tmp_path):
+    import json
+    import lan_job_api
+
+    monkeypatch.setenv("SILENCE_CUTTER_DATA_DIR", str(tmp_path))
+    (tmp_path / "channel-discovery-history.json").write_text(json.dumps({"used": {"job_id": "old"}}))
+    monkeypatch.setattr(lan_job_api, "_backend", lambda: type("Backend", (), {"_yt_dlp_command": staticmethod(lambda: ["yt-dlp"]), "list_jobs": staticmethod(lambda: [])})())
+
+    def run(command, **kwargs):
+        if "broken/videos" in command[-1]:
+            return type("Result", (), {"returncode": 1, "stdout": "", "stderr": "blocked"})()
+        row = {"id": "used", "url": "https://youtu.be/used", "title": "Used", "channel": "A", "upload_date": "20260101", "view_count": 999}
+        return type("Result", (), {"returncode": 0, "stdout": json.dumps(row), "stderr": ""})()
+
+    monkeypatch.setattr(lan_job_api.subprocess, "run", run)
+    monkeypatch.setattr(lan_job_api, "create_remote_job", lambda *_args, **_kwargs: {"job_id": "never"})
+    result = lan_job_api.discover_channel_jobs([
+        "https://www.youtube.com/@used/videos",
+        "https://www.youtube.com/@broken/videos",
+    ])
+
+    assert result["created"] == []
+    assert result["skipped"][0]["reason"] == "already_used"
+    assert result["errors"][0]["channel_url"].endswith("broken/videos")
+
+
+def test_discovery_pauses_between_created_channel_jobs(monkeypatch, tmp_path):
+    from datetime import datetime, timezone
+    import json
+    import lan_job_api
+
+    monkeypatch.setenv("SILENCE_CUTTER_DATA_DIR", str(tmp_path))
+    monkeypatch.setattr(lan_job_api, "_backend", lambda: type("Backend", (), {
+        "_yt_dlp_command": staticmethod(lambda: ["yt-dlp"]),
+        "list_jobs": staticmethod(lambda: []),
+    })())
+
+    def run(command, **kwargs):
+        channel = command[-1]
+        suffix = "one" if "@one" in channel else "two"
+        row = {"id": suffix, "url": f"https://youtu.be/{suffix}", "title": suffix,
+               "channel": suffix, "upload_date": "20260101", "view_count": 10}
+        return type("Result", (), {"returncode": 0, "stdout": json.dumps(row), "stderr": ""})()
+
+    monkeypatch.setattr(lan_job_api.subprocess, "run", run)
+    created = []
+    monkeypatch.setattr(lan_job_api, "create_remote_job", lambda payload, **_: created.append(payload["url"]) or {
+        "job_id": f"job-{len(created)}", "status": "QUEUED"
+    })
+    pauses = []
+
+    result = lan_job_api.discover_channel_jobs(
+        ["https://youtube.com/@one", "https://youtube.com/@two"],
+        now=datetime(2026, 8, 24, tzinfo=timezone.utc),
+        sleeper=pauses.append,
+        pause_seconds=lambda: 90,
+    )
+
+    assert result["total"] == 2
+    assert created == ["https://youtu.be/one", "https://youtu.be/two"]
+    assert pauses == [90]
+
+
+def test_validate_discovery_submission_requires_bounded_channel_list():
+    import lan_job_api
+
+    assert lan_job_api.validate_discovery_submission({"channels": [" https://youtube.com/@one ", ""]}) == {
+        "channels": ["https://youtube.com/@one"]
+    }
+    try:
+        lan_job_api.validate_discovery_submission({"channels": "https://youtube.com/@one"})
+    except ValueError as error:
+        assert str(error) == "channels must be a list"
+    else:
+        raise AssertionError("scalar channel input was accepted")
+
+
 def test_root_status_is_public():
     # The HTTP handler keeps the root informational while job endpoints stay protected.
     from lan_job_api import _Handler

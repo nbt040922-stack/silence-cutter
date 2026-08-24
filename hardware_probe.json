@@ -1,6 +1,6 @@
 {
   "schema_version": 1,
-  "timestamp": "2026-08-23T07:20:21Z",
+  "timestamp": "2026-08-24T10:31:03Z",
   "cpu": {
     "model": "Intel(R) Core(TM) i7-10700 CPU @ 2.90GHz"
   },
@@ -28,7 +28,7 @@
     "cuda_model_load_succeeds": true,
     "cpu_fallback": false,
     "error": "",
-    "model_load_time": 23.940707400004612
+    "model_load_time": 25.546474100003252
   },
   "nvenc": {
     "initializes": true,
@@ -39,5 +39,5 @@
     "renderer": "h264_nvenc"
   },
   "full_gpu_production": true,
-  "probe_time": 26.943767400021898
+  "probe_time": 28.30321610000101
 }

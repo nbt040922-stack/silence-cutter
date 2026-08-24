@@ -2,16 +2,18 @@ from __future__ import annotations
 
 import json
 import os
+import random
 import secrets
 import socket
 import subprocess
 import threading
 import time
+from datetime import datetime, timedelta, timezone
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
-from typing import Any
+from typing import Any, Callable
 from urllib import request as urlrequest
-from urllib.parse import parse_qs, urlparse
+from urllib.parse import parse_qs, urlencode, urlparse, urlunparse
 
 
 HOST = os.environ.get("SILENCE_CUTTER_LAN_HOST", "0.0.0.0")
@@ -19,6 +21,8 @@ PORT = int(os.environ.get("SILENCE_CUTTER_LAN_PORT", "8780"))
 INPUT_ROOT = Path(os.environ.get("SILENCE_CUTTER_LAN_INPUT_ROOT", "")).expanduser() if os.environ.get("SILENCE_CUTTER_LAN_INPUT_ROOT") else None
 YTDOWNLOAD_BASE_URL = os.environ.get("YTDOWNLOAD_BRIDGE_URL", "http://127.0.0.1:8790").rstrip("/")
 SILENCE_BASE_URL = os.environ.get("SILENCE_CUTTER_BRIDGE_URL", "http://127.0.0.1:8791").rstrip("/")
+DISCOVERY_PAUSE_MIN_SECONDS = 60
+DISCOVERY_PAUSE_MAX_SECONDS = 120
 
 
 def _load_token() -> str:
@@ -167,6 +171,20 @@ def validate_submission(payload: dict[str, Any]) -> dict[str, str | None]:
     return {"url": url, "source_path": source_path}
 
 
+def validate_discovery_submission(payload: dict[str, Any]) -> dict[str, list[str]]:
+    channels = payload.get("channels")
+    if not isinstance(channels, list):
+        raise ValueError("channels must be a list")
+    values = list(dict.fromkeys(str(value or "").strip() for value in channels if str(value or "").strip()))
+    if not values:
+        raise ValueError("at least one channel is required")
+    if len(values) > 50:
+        raise ValueError("maximum 50 channels per scan")
+    if any(not value.startswith(("http://", "https://")) for value in values):
+        raise ValueError("channel URLs must use http or https")
+    return {"channels": values}
+
+
 def _backend():
     from backend import job_runner
     return job_runner
@@ -190,7 +208,178 @@ def resolve_submitter_name(ip: str | None) -> str | None:
 
 
 def _youtube_video_id(url: str) -> str:
-    return (parse_qs(urlparse(str(url)).query).get("v") or [""])[0].strip()
+    parsed = urlparse(str(url))
+    value = (parse_qs(parsed.query).get("v") or [""])[0].strip()
+    if value:
+        return value
+    if parsed.netloc.lower() in {"youtu.be", "www.youtu.be"}:
+        return parsed.path.strip("/").split("/", 1)[0]
+    parts = [part for part in parsed.path.split("/") if part]
+    if len(parts) >= 2 and parts[-2] in {"shorts", "live", "embed"}:
+        return parts[-1]
+    return ""
+
+
+def _discovery_history_path() -> Path:
+    configured_root = os.environ.get("SILENCE_CUTTER_DATA_DIR", "").strip()
+    if configured_root:
+        root = Path(configured_root).expanduser()
+    else:
+        local_app_data = os.environ.get("LOCALAPPDATA", "").strip()
+        root = (Path(local_app_data) / "SilenceCutter") if local_app_data else (Path.home() / ".silence_cutter")
+    return root / "channel-discovery-history.json"
+
+
+def _load_discovery_history() -> dict[str, dict[str, Any]]:
+    path = _discovery_history_path()
+    try:
+        payload = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        return {}
+    return payload if isinstance(payload, dict) else {}
+
+
+def _save_discovery_history(history: dict[str, dict[str, Any]]) -> None:
+    path = _discovery_history_path()
+    path.parent.mkdir(parents=True, exist_ok=True)
+    temporary = path.with_suffix(".tmp")
+    temporary.write_text(json.dumps(history, ensure_ascii=False, indent=2), encoding="utf-8")
+    os.replace(temporary, path)
+
+
+def _videos_url(value: str) -> str:
+    parsed = urlparse(str(value or "").strip())
+    path = parsed.path.rstrip("/")
+    if not path.endswith("/videos"):
+        path += "/videos"
+    return urlunparse((parsed.scheme, parsed.netloc, path, "", "", ""))
+
+
+def _popular_videos_url(value: str) -> str:
+    parsed = urlparse(_videos_url(value))
+    return urlunparse((parsed.scheme, parsed.netloc, parsed.path, "", "view=0&sort=p&flow=grid", ""))
+
+
+def _candidate_date(value: Any) -> datetime | None:
+    text = str(value or "").strip()
+    if len(text) == 8 and text.isdigit():
+        try:
+            return datetime.strptime(text, "%Y%m%d").replace(tzinfo=timezone.utc)
+        except ValueError:
+            return None
+    if isinstance(value, (int, float)):
+        try:
+            return datetime.fromtimestamp(value, tz=timezone.utc)
+        except (OverflowError, OSError, ValueError):
+            return None
+    return None
+
+
+def fetch_channel_candidates(
+    channel_url: str, *, since: datetime, until: datetime, limit: int = 100,
+) -> list[dict[str, Any]]:
+    """Pick the first unseen-by-date candidate from the channel's popular tab."""
+    backend = _backend()
+    command_factory = getattr(backend, "_yt_dlp_command", None)
+    command = command_factory() if callable(command_factory) else None
+    if not command:
+        raise RuntimeError("yt-dlp is unavailable")
+    result = subprocess.run(
+        [*command, "--dump-json", "--flat-playlist", "--skip-download", "--no-warnings", "--playlist-end", str(limit),
+         _popular_videos_url(channel_url)],
+        capture_output=True, text=True, timeout=120, check=False,
+    )
+    if result.returncode != 0:
+        raise RuntimeError((result.stderr or "channel scan failed").strip()[-500:])
+    ranked: list[dict[str, Any]] = []
+    for line in result.stdout.splitlines():
+        try:
+            payload = json.loads(line)
+        except json.JSONDecodeError:
+            continue
+        video_id = str(payload.get("id") or _youtube_video_id(payload.get("webpage_url") or payload.get("url"))).strip()
+        if not video_id:
+            continue
+        url = str(payload.get("webpage_url") or payload.get("original_url") or payload.get("url") or f"https://www.youtube.com/watch?v={video_id}")
+        ranked.append({
+            "video_id": video_id, "url": url, "title": str(payload.get("title") or video_id),
+            "channel": str(payload.get("channel") or payload.get("uploader") or "YouTube"),
+            "channel_id": payload.get("channel_id"), "published_at": None,
+            "view_count": int(payload.get("view_count") or 0), "thumbnail": payload.get("thumbnail"),
+            "_published": payload.get("upload_date") or payload.get("release_date")
+                or payload.get("release_timestamp") or payload.get("timestamp"),
+        })
+    ranked.sort(key=lambda item: (item.get("view_count", 0), item["video_id"]), reverse=True)
+    candidates: list[dict[str, Any]] = []
+    for item in ranked:
+        published = _candidate_date(item.pop("_published", None))
+        if published is None:
+            date_result = subprocess.run(
+                [*command, "--skip-download", "--no-warnings", "--no-playlist", "--print", "%(upload_date)s", item["url"]],
+                capture_output=True, text=True, timeout=30, check=False,
+            )
+            if date_result.returncode != 0:
+                continue
+            lines = [line.strip() for line in date_result.stdout.splitlines() if line.strip()]
+            published = _candidate_date(lines[-1] if lines else None)
+        if published is None or not (since <= published <= until):
+            continue
+        item["published_at"] = published.isoformat()
+        candidates.append(item)
+        break
+    return candidates
+
+
+def discover_channel_jobs(
+    channel_urls: list[str], *, now: datetime | None = None,
+    sleeper: Callable[[float], None] = time.sleep,
+    pause_seconds: Callable[[], float] | None = None,
+) -> dict[str, Any]:
+    """Select one unseen high-view video per channel and enqueue it through MANUAL LAN."""
+    until = now or datetime.now(timezone.utc)
+    if until.tzinfo is None:
+        until = until.replace(tzinfo=timezone.utc)
+    since = until - timedelta(days=365 * 2)
+    history = _load_discovery_history()
+    used_ids = set(history)
+    backend = _backend()
+    for job in getattr(backend, "list_jobs", lambda: [])():
+        if job.get("origin") == "MANUAL_LAN":
+            job_id = _youtube_video_id(job.get("url") or "")
+            if job_id:
+                used_ids.add(job_id)
+    result: dict[str, Any] = {"created": [], "skipped": [], "errors": [], "total": 0}
+    seen_channels: set[str] = set()
+    unique_channels: list[str] = []
+    for raw_url in channel_urls:
+        channel_url = _videos_url(raw_url)
+        if not channel_url or channel_url in seen_channels:
+            continue
+        seen_channels.add(channel_url)
+        unique_channels.append(channel_url)
+    pause_seconds = pause_seconds or (lambda: random.uniform(DISCOVERY_PAUSE_MIN_SECONDS, DISCOVERY_PAUSE_MAX_SECONDS))
+    for index, channel_url in enumerate(unique_channels):
+        try:
+            all_candidates = fetch_channel_candidates(channel_url, since=since, until=until)
+            candidates = [item for item in all_candidates if item["video_id"] not in used_ids]
+            if not candidates:
+                reason = "already_used" if all_candidates else "no_video"
+                result["skipped"].append({"channel_url": channel_url, "reason": reason})
+                continue
+            selected = max(candidates, key=lambda item: (item.get("view_count", 0), item.get("published_at") or "", item["video_id"]))
+            submitted = create_remote_job({"url": selected["url"], "discovery": "channel_top_view"})
+            selected = {**selected, "job_id": submitted["job_id"], "status": submitted.get("status"), "selected_at": until.isoformat()}
+            history[selected["video_id"]] = selected
+            used_ids.add(selected["video_id"])
+            result["created"].append(selected)
+            result["total"] += 1
+            if index < len(unique_channels) - 1:
+                sleeper(max(0.0, float(pause_seconds())))
+        except Exception as error:
+            result["errors"].append({"channel_url": channel_url, "error": str(error)[:500]})
+    if result["created"]:
+        _save_discovery_history(history)
+    return result
 
 
 def fetch_youtube_metadata(url: str) -> dict[str, Any]:
@@ -546,6 +735,18 @@ class _Handler(BaseHTTPRequestHandler):
     def do_POST(self) -> None:
         if not self._authorized():
             self._reply(401, {"error": "unauthorized"})
+            return
+        if self.path == "/discover-jobs":
+            try:
+                size = int(self.headers.get("Content-Length", "0"))
+                if size <= 0 or size > 64 * 1024:
+                    raise ValueError("invalid request size")
+                payload = validate_discovery_submission(json.loads(self.rfile.read(size)))
+                self._reply(200, discover_channel_jobs(payload["channels"]))
+            except (ValueError, json.JSONDecodeError) as error:
+                self._reply(400, {"error": str(error)})
+            except Exception as error:
+                self._reply(500, {"error": str(error)})
             return
         if self.path.startswith("/jobs/") and self.path.endswith("/cancel"):
             try:

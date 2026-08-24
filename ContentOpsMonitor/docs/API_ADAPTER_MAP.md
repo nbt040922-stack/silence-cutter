@@ -19,6 +19,7 @@ Discovered from the running services and their source contracts on 2026-08-24. T
 | Manual LAN API | 8780 | `GET /health` | API health | `status`, `port` | Service status |
 | Manual LAN API | 8780 | `GET /jobs` | Manual jobs | `{ "jobs": [...] }`, bearer token when remote auth applies | Jobs page |
 | Manual LAN API | 8780 | `POST /jobs` | Create manual job | `{ "job_id": ... }` or job record, bearer token | Manual Job page |
+| Manual LAN API | 8780 | `POST /discover-jobs` | Scan channels and enqueue one unseen high-view video per channel | `created`, `skipped`, `errors`, `total` | Jobs → Tạo Job mới |
 | Manual LAN API | 8780 | `GET /jobs/{id}` | Read manual job | job record | Job enrichment |
 
 ## Notes

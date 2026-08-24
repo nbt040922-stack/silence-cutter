@@ -7,6 +7,8 @@ namespace ContentOps.Monitor.Services.Api;
 
 public sealed class YtNotifiAdapter(ApiClient client, Uri baseUri)
 {
+    private static readonly TimeSpan ChannelOperationTimeout = TimeSpan.FromSeconds(30);
+
     public Task<ApiResult<Dictionary<string, object>>> GetHealthAsync(CancellationToken ct = default) =>
         client.GetJsonAsync<Dictionary<string, object>>(new(baseUri, "/health"), ct);
 
@@ -33,10 +35,16 @@ public sealed class YtNotifiAdapter(ApiClient client, Uri baseUri)
         client.PatchJsonAsync<JsonElement>(new(baseUri, $"/api/channels/{Uri.EscapeDataString(channelId)}"), new { cut_enabled = enabled }, ct);
 
     public Task<ApiResult<JsonElement>> AddChannelAsync(string channelUrl, string name, CancellationToken ct = default) =>
-        client.PostJsonAsync<JsonElement>(new(baseUri, "/api/channels"), new { channel_id = channelUrl, name }, cancellationToken: ct);
+        client.PostJsonAsync<JsonElement>(new(baseUri, "/api/channels"), new { channel_id = channelUrl, name }, cancellationToken: ct, timeout: ChannelOperationTimeout);
 
     public Task<ApiResult<ResolvedChannel>> ResolveChannelAsync(string channelUrl, CancellationToken ct = default) =>
-        client.PostJsonAsync<ResolvedChannel>(new(baseUri, "/api/channels/resolve"), new { url = channelUrl }, cancellationToken: ct);
+        client.PostJsonAsync<ResolvedChannel>(new(baseUri, "/api/channels/resolve"), new { url = channelUrl }, cancellationToken: ct, timeout: ChannelOperationTimeout);
+
+    public Task<ApiResult<ChannelBulkResult>> AddChannelsBulkAsync(IReadOnlyList<string> channelUrls, CancellationToken ct = default) =>
+        client.PostJsonAsync<ChannelBulkResult>(new(baseUri, "/api/channels/bulk"), new { channels = channelUrls }, cancellationToken: ct, timeout: ChannelOperationTimeout);
+
+    public Task<ApiResult<JsonElement>> RenameChannelAsync(string channelId, string name, CancellationToken ct = default) =>
+        client.PatchJsonAsync<JsonElement>(new(baseUri, $"/api/channels/{Uri.EscapeDataString(channelId)}"), new { name }, ct);
 
     public Task<ApiResult<JsonElement>> DeleteChannelAsync(string channelId, CancellationToken ct = default) =>
         client.DeleteJsonAsync<JsonElement>(new(baseUri, $"/api/channels/{Uri.EscapeDataString(channelId)}"), ct);
@@ -68,6 +76,9 @@ public sealed class ManualLanAdapter(ApiClient client, Uri baseUri)
 
     public Task<ApiResult<JsonElement>> CreateJobAsync(string url, CancellationToken ct = default) =>
         client.PostJsonAsync<JsonElement>(new(baseUri, "/jobs"), new { url }, cancellationToken: ct);
+
+    public Task<ApiResult<ChannelDiscoveryResult>> DiscoverJobsAsync(IReadOnlyList<string> channels, CancellationToken ct = default) =>
+        client.PostJsonAsync<ChannelDiscoveryResult>(new(baseUri, "/discover-jobs"), new { channels }, cancellationToken: ct, timeout: TimeSpan.FromMinutes(30));
 
     public Task<ApiResult<ManualVideoMetadata>> GetMetadataAsync(string url, CancellationToken ct = default) =>
         client.GetJsonAsync<ManualVideoMetadata>(new(baseUri, $"/metadata?url={Uri.EscapeDataString(url)}"), ct);

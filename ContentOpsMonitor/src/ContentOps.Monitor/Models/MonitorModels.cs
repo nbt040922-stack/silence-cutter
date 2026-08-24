@@ -109,6 +109,29 @@ public sealed record ManualVideoMetadata(
     string? Thumbnail,
     string? Url);
 
+public sealed record ChannelDiscoveryItem(
+    [property: JsonPropertyName("video_id")] string? VideoId,
+    string? Url,
+    string? Title,
+    string? Channel,
+    [property: JsonPropertyName("view_count")] long ViewCount = 0,
+    [property: JsonPropertyName("job_id")] string? JobId = null,
+    string? Status = null);
+
+public sealed record ChannelDiscoverySkip(
+    [property: JsonPropertyName("channel_url")] string? ChannelUrl,
+    string? Reason);
+
+public sealed record ChannelDiscoveryError(
+    [property: JsonPropertyName("channel_url")] string? ChannelUrl,
+    string? Error);
+
+public sealed record ChannelDiscoveryResult(
+    IReadOnlyList<ChannelDiscoveryItem> Created,
+    IReadOnlyList<ChannelDiscoverySkip> Skipped,
+    IReadOnlyList<ChannelDiscoveryError> Errors,
+    int Total);
+
 public sealed record ResolvedChannel(
     [property: JsonPropertyName("channel_id")]
     string? ChannelId,
@@ -116,6 +139,20 @@ public sealed record ResolvedChannel(
     string? CanonicalUrl,
     [property: JsonPropertyName("title")]
     string? Title);
+
+public sealed record ChannelBulkItem(
+    string Input,
+    string Status,
+    [property: JsonPropertyName("channel_id")] string? ChannelId,
+    string? Name,
+    string? Error);
+
+public sealed record ChannelBulkResult(
+    int Total,
+    int Added,
+    int Existing,
+    int Failed,
+    IReadOnlyList<ChannelBulkItem> Results);
 
 public sealed record ChannelRecord(
     string Id,

@@ -24,20 +24,23 @@ public sealed class ApiClient : IDisposable
 
     private readonly HttpClient _httpClient;
     private readonly bool _disposeClient;
+    private readonly TimeSpan _defaultTimeout;
 
     public ApiClient(HttpMessageHandler? handler = null, TimeSpan? timeout = null)
     {
         _httpClient = handler is null ? new HttpClient() : new HttpClient(handler);
         _disposeClient = true;
-        _httpClient.Timeout = timeout ?? TimeSpan.FromSeconds(3);
+        _defaultTimeout = timeout ?? TimeSpan.FromSeconds(3);
+        _httpClient.Timeout = Timeout.InfiniteTimeSpan;
     }
 
     public async Task<ApiResult<T>> GetJsonAsync<T>(Uri uri, CancellationToken cancellationToken = default)
     {
         try
         {
-            using var response = await _httpClient.GetAsync(uri, cancellationToken);
-            return await ReadResponseAsync<T>(response, cancellationToken);
+            using var requestCts = CreateRequestCancellation(cancellationToken);
+            using var response = await _httpClient.GetAsync(uri, requestCts.Token);
+            return await ReadResponseAsync<T>(response, requestCts.Token);
         }
         catch (Exception ex) when (ex is HttpRequestException or TaskCanceledException or JsonException)
         {
@@ -45,18 +48,19 @@ public sealed class ApiClient : IDisposable
         }
     }
 
-    public async Task<ApiResult<T>> PostJsonAsync<T>(Uri uri, object payload, string? bearerToken = null, CancellationToken cancellationToken = default)
+    public async Task<ApiResult<T>> PostJsonAsync<T>(Uri uri, object payload, string? bearerToken = null, CancellationToken cancellationToken = default, TimeSpan? timeout = null)
     {
         try
         {
+            using var requestCts = CreateRequestCancellation(cancellationToken, timeout);
             using var request = new HttpRequestMessage(HttpMethod.Post, uri)
             {
                 Content = CreateJsonContent(payload)
             };
             if (!string.IsNullOrWhiteSpace(bearerToken))
                 request.Headers.Authorization = new("Bearer", bearerToken);
-            using var response = await _httpClient.SendAsync(request, cancellationToken);
-            return await ReadResponseAsync<T>(response, cancellationToken);
+            using var response = await _httpClient.SendAsync(request, requestCts.Token);
+            return await ReadResponseAsync<T>(response, requestCts.Token);
         }
         catch (Exception ex) when (ex is HttpRequestException or TaskCanceledException or JsonException)
         {
@@ -68,9 +72,10 @@ public sealed class ApiClient : IDisposable
     {
         try
         {
+            using var requestCts = CreateRequestCancellation(cancellationToken);
             using var request = new HttpRequestMessage(HttpMethod.Patch, uri) { Content = CreateJsonContent(payload) };
-            using var response = await _httpClient.SendAsync(request, cancellationToken);
-            return await ReadResponseAsync<T>(response, cancellationToken);
+            using var response = await _httpClient.SendAsync(request, requestCts.Token);
+            return await ReadResponseAsync<T>(response, requestCts.Token);
         }
         catch (Exception ex) when (ex is HttpRequestException or TaskCanceledException or JsonException)
         {
@@ -82,8 +87,9 @@ public sealed class ApiClient : IDisposable
     {
         try
         {
-            using var response = await _httpClient.DeleteAsync(uri, cancellationToken);
-            return await ReadResponseAsync<T>(response, cancellationToken);
+            using var requestCts = CreateRequestCancellation(cancellationToken);
+            using var response = await _httpClient.DeleteAsync(uri, requestCts.Token);
+            return await ReadResponseAsync<T>(response, requestCts.Token);
         }
         catch (Exception ex) when (ex is HttpRequestException or TaskCanceledException or JsonException)
         {
@@ -109,6 +115,13 @@ public sealed class ApiClient : IDisposable
 
     private static HttpContent CreateJsonContent(object payload) =>
         new StringContent(JsonSerializer.Serialize(payload, JsonOptions), Encoding.UTF8, "application/json");
+
+    private CancellationTokenSource CreateRequestCancellation(CancellationToken callerToken, TimeSpan? timeout = null)
+    {
+        var requestCts = CancellationTokenSource.CreateLinkedTokenSource(callerToken);
+        requestCts.CancelAfter(timeout ?? _defaultTimeout);
+        return requestCts;
+    }
 
     public void Dispose()
     {

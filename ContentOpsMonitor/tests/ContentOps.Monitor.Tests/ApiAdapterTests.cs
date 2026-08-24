@@ -148,6 +148,39 @@ public sealed class ApiAdapterTests
     }
 
     [Fact]
+    public async Task ManualLanAdapterPostsChannelDiscoveryBatch()
+    {
+        HttpRequestMessage? received = null;
+        var receivedBody = string.Empty;
+        using var client = new ApiClient(new FakeHandler(async request =>
+        {
+            received = request;
+            receivedBody = await request.Content!.ReadAsStringAsync();
+            return JsonResponse("{\"created\":[{\"video_id\":\"abc\",\"job_id\":\"m-1\"}],\"skipped\":[],\"errors\":[],\"total\":1}");
+        }));
+        var adapter = new ManualLanAdapter(client, new Uri("http://127.0.0.1:8780"));
+
+        var result = await adapter.DiscoverJobsAsync(["https://youtube.com/@demo"]);
+
+        Assert.True(result.Success);
+        Assert.Equal("abc", result.Value!.Created[0].VideoId);
+        Assert.Equal(HttpMethod.Post, received!.Method);
+        Assert.Equal("/discover-jobs", received.RequestUri!.AbsolutePath);
+        Assert.Contains("youtube.com/@demo", receivedBody);
+    }
+
+    [Fact]
+    public async Task ManualLanAdapterAllowsSlowChannelDiscoveryWithoutChangingDefaultTimeout()
+    {
+        using var client = new ApiClient(new DelayedHandler(TimeSpan.FromMilliseconds(50)), TimeSpan.FromMilliseconds(1));
+        var adapter = new ManualLanAdapter(client, new Uri("http://127.0.0.1:8780"));
+
+        var result = await adapter.DiscoverJobsAsync(["https://youtube.com/@demo"]);
+
+        Assert.True(result.Success, result.Error);
+    }
+
+    [Fact]
     public async Task JobAdaptersExposeCancelRetryAndDeleteRoutes()
     {
         var requests = new List<HttpRequestMessage>();
@@ -269,6 +302,38 @@ public sealed class ApiAdapterTests
         Assert.Contains("url=https%3A%2F%2Fyoutu.be%2Fdemo", received.RequestUri.Query);
     }
 
+    [Fact]
+    public async Task YtNotifiChannelResolveAllowsSlowProviderResponse()
+    {
+        using var client = new ApiClient(
+            new DelayedHandler(TimeSpan.FromMilliseconds(50), "{\"channel_id\":\"UC_demo\",\"name\":\"Demo\"}"),
+            TimeSpan.FromMilliseconds(1));
+        var adapter = new YtNotifiAdapter(client, new Uri("http://127.0.0.1:8787"));
+
+        var result = await adapter.ResolveChannelAsync("https://youtube.com/@demo");
+
+        Assert.True(result.Success, result.Error);
+        Assert.Equal("UC_demo", result.Value!.ChannelId);
+    }
+
+    [Fact]
+    public async Task YtNotifiAdapterPostsBulkChannelCreateToBulkRoute()
+    {
+        HttpRequestMessage? received = null;
+        using var client = new ApiClient(new FakeHandler(request =>
+        {
+            received = request;
+            return Task.FromResult(JsonResponse("{\"total\":2,\"added\":2,\"existing\":0,\"failed\":0,\"results\":[{\"input\":\"https://youtube.com/@one\",\"status\":\"ADDED\",\"channel_id\":\"UC_one\",\"name\":\"One\"},{\"input\":\"https://youtube.com/@two\",\"status\":\"ADDED\",\"channel_id\":\"UC_two\",\"name\":\"Two\"}]}" ));
+        }));
+        var adapter = new YtNotifiAdapter(client, new Uri("http://127.0.0.1:8787"));
+
+        var result = await adapter.AddChannelsBulkAsync(["https://youtube.com/@one", "https://youtube.com/@two"]);
+
+        Assert.True(result.Success);
+        Assert.Equal(2, result.Value!.Added);
+        Assert.Equal("/api/channels/bulk", received!.RequestUri!.AbsolutePath);
+    }
+
     private static ApiClient CreateClient(string body) => new(new FakeHandler(_ => Task.FromResult(JsonResponse(body))));
 
     private static HttpResponseMessage JsonResponse(string body, HttpStatusCode status = HttpStatusCode.OK) =>
@@ -277,5 +342,14 @@ public sealed class ApiAdapterTests
     private sealed class FakeHandler(Func<HttpRequestMessage, Task<HttpResponseMessage>> responder) : HttpMessageHandler
     {
         protected override Task<HttpResponseMessage> SendAsync(HttpRequestMessage request, CancellationToken cancellationToken) => responder(request);
+    }
+
+    private sealed class DelayedHandler(TimeSpan delay, string body = "{\"created\":[],\"skipped\":[],\"errors\":[],\"total\":0}") : HttpMessageHandler
+    {
+        protected override async Task<HttpResponseMessage> SendAsync(HttpRequestMessage request, CancellationToken cancellationToken)
+        {
+            await Task.Delay(delay, cancellationToken);
+            return JsonResponse(body);
+        }
     }
 }

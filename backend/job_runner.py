@@ -99,7 +99,7 @@ def default_settings() -> dict[str, Any]:
     return {
         "workspace_folder": str((data_root / "workspace").resolve()),
         "input_folder": str(input_root),
-        "output_folder": str(Path("D:/Vlog/Output").resolve()),
+        "output_folder": str(Path("F:/Vlog-tool").resolve()),
         "input_mode": "LOCAL_FOLDER",
         "watch_input_folder": False,
         "local_file_stability_seconds": 7.0,

@@ -31,6 +31,12 @@ class JobRunnerTests(unittest.TestCase):
         job_runner.SETTINGS_PATH = self.old_settings
         self.directory.cleanup()
 
+    def test_default_output_folder_is_vlog_tool_drive(self):
+        self.assertEqual(
+            Path(job_runner.default_settings()["output_folder"]),
+            Path(r"F:\Vlog-tool").resolve(),
+        )
+
     def test_three_jobs_run_sequentially_and_survive_reload(self):
         jobs = job_runner.create_jobs([
             "https://example.com/one", "https://example.com/two", "https://example.com/three"
