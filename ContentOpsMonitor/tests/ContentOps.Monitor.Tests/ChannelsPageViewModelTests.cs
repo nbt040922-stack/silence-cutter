@@ -136,12 +136,22 @@ public sealed class ChannelsPageViewModelTests
         var page = new ChannelsPageViewModel();
 
         Assert.False(page.SubmitAddChannelsCommand.CanExecute(null));
-        page.AddRows[0].ChannelUrl = "https://youtube.com/@demo";
-        page.AddRows[0].ChannelName = "Demo";
+        page.AddDraft.ChannelUrlsText = "https://youtube.com/@demo";
+        page.AddDraft.ChannelNamesText = "Demo";
         Assert.True(page.SubmitAddChannelsCommand.CanExecute(null));
+    }
 
-        page.AddDraftRowCommand.Execute(null);
+    [Fact]
+    public void AddFormReportsWhenLinkAndNameColumnsAreUneven()
+    {
+        var page = new ChannelsPageViewModel();
+        page.AddDraft.ChannelUrlsText = "https://youtube.com/@demo\nhttps://youtube.com/@second";
+        page.AddDraft.ChannelNamesText = "Demo";
+
         Assert.False(page.SubmitAddChannelsCommand.CanExecute(null));
+        Assert.Contains("2", page.AddValidationMessage, StringComparison.OrdinalIgnoreCase);
+        Assert.Contains("1", page.AddValidationMessage, StringComparison.OrdinalIgnoreCase);
+        Assert.Contains("không khớp", page.AddValidationMessage, StringComparison.OrdinalIgnoreCase);
     }
 
     private static IReadOnlyList<ChannelRecord> CreateChannels(int count) => Enumerable.Range(1, count)
