@@ -54,3 +54,16 @@ def test_manifest_rejects_invalid_hash():
             "model": "x", "revision": "r",
             "files": [{"name": "x", "size_bytes": 1, "sha256": "bad", "url": "https://example/x"}],
         })
+
+
+def test_manifest_accepts_utf8_bom_file(tmp_path):
+    path = tmp_path / "manifest.json"
+    path.write_text(json.dumps({
+        "model": "x", "revision": "r",
+        "files": [{
+            "name": "x", "size_bytes": 1,
+            "sha256": "0" * 64, "url": "https://example/x",
+        }],
+    }), encoding="utf-8-sig")
+
+    assert ModelManifest.from_file(path).model == "x"

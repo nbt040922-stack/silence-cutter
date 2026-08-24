@@ -28,7 +28,7 @@ class ModelManifest:
 
     @classmethod
     def from_file(cls, path: Path) -> "ModelManifest":
-        return cls.from_dict(json.loads(path.read_text(encoding="utf-8")))
+        return cls.from_dict(json.loads(path.read_text(encoding="utf-8-sig")))
 
     @classmethod
     def from_dict(cls, value: dict[str, Any]) -> "ModelManifest":
