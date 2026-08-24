@@ -2,6 +2,13 @@ $ErrorActionPreference = 'Stop'
 $repo = (Resolve-Path (Join-Path $PSScriptRoot '..')).Path
 $data = Join-Path $env:ProgramData 'ContentOps\SilenceCore'
 $venv = Join-Path $repo '.venv_team\Scripts\python.exe'
+# Remove the obsolete 15-minute override left by older installations.  The
+# selector now owns the 25-minute default; preserve any deliberate custom
+# threshold instead of overwriting it.
+if ($env:LONG_VIDEO_THRESHOLD_SECONDS -eq '900') {
+  Remove-Item Env:LONG_VIDEO_THRESHOLD_SECONDS -ErrorAction SilentlyContinue
+  [Environment]::SetEnvironmentVariable('LONG_VIDEO_THRESHOLD_SECONDS', $null, 'User')
+}
 $env:SILENCE_CORE_PACKAGED = '0'
 $env:SILENCE_CORE_INSTALL_ROOT = $repo
 $env:SILENCE_CORE_DATA_ROOT = $data
