@@ -51,7 +51,7 @@ def _extract_frame(video: Path, output: Path, timestamp: float) -> None:
         raise RuntimeError(f"preview frame extraction failed: {completed.stderr.strip()}")
 
 
-def render_overlay(plan: dict, output_path: Path, label: str) -> Path:
+def render_overlay(plan: dict, output_path: Path, label: str | None = None) -> Path:
     layout = plan["layout"]
     canvas_info = layout["canvas"]
     canvas = Image.new(
@@ -83,28 +83,29 @@ def render_overlay(plan: dict, output_path: Path, label: str) -> Path:
         )
         cursor_y += line_height
 
-    part_banner = layout["part_banner_geometry"]
-    draw.rounded_rectangle(
-        (
-            part_banner["x"], part_banner["y"],
-            part_banner["x"] + part_banner["width"],
-            part_banner["y"] + part_banner["height"],
-        ),
-        radius=part_banner["radius"], fill="white",
-    )
-    part_info = layout["part_label_font"]
-    part_font = _font(
-        part_info["font_file"], part_info["rendered_size_px"],
-        bold_variable=part_info["bold_variable"],
-    )
-    box = draw.textbbox((0, 0), label, font=part_font)
-    draw.text(
-        (
-            (canvas.width - (box[2] - box[0])) / 2,
-            part_banner["y"] + (part_banner["height"] - (box[3] - box[1])) / 2 - box[1],
-        ),
-        label, font=part_font, fill="black",
-    )
+    part_banner = layout.get("part_banner_geometry")
+    if part_banner and label:
+        draw.rounded_rectangle(
+            (
+                part_banner["x"], part_banner["y"],
+                part_banner["x"] + part_banner["width"],
+                part_banner["y"] + part_banner["height"],
+            ),
+            radius=part_banner["radius"], fill="white",
+        )
+        part_info = layout["part_label_font"]
+        part_font = _font(
+            part_info["font_file"], part_info["rendered_size_px"],
+            bold_variable=part_info["bold_variable"],
+        )
+        box = draw.textbbox((0, 0), label, font=part_font)
+        draw.text(
+            (
+                (canvas.width - (box[2] - box[0])) / 2,
+                part_banner["y"] + (part_banner["height"] - (box[3] - box[1])) / 2 - box[1],
+            ),
+            label, font=part_font, fill="black",
+        )
     output_path.parent.mkdir(parents=True, exist_ok=True)
     canvas.save(output_path, format="PNG", optimize=True)
     return output_path

@@ -185,8 +185,10 @@ def _compact_title(title: str) -> str:
 
 def _choose_base(output_dir: Path, title: str, source_id: str | None, part_count: int) -> str:
     base = safe_filename_title(title, fallback_id=source_id)
-    if any((output_dir / f"{base}_PART_{index}.mp4").exists()
-           for index in range(1, part_count + 1)):
+    existing = ((output_dir / f"{base}.mp4").exists() if part_count == 1 else
+                any((output_dir / f"{base}_PART_{index}.mp4").exists()
+                    for index in range(1, part_count + 1)))
+    if existing:
         suffix = safe_filename_title(source_id or "video", limit=32)
         base = f"{safe_filename_title(base, fallback_id=source_id, limit=119 - len(suffix))}_{suffix}"
     return base

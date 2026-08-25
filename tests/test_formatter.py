@@ -46,6 +46,58 @@ class FormatterTests(unittest.TestCase):
                 self.assertEqual(len(parts), 3)
         self.assertEqual(formatter_status(1200.1), "PLANNED")
 
+    def test_under_six_minutes_is_one_bannered_output_without_part_label(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            clean = root / "rendered.mp4"
+            clean.write_bytes(b"clean")
+            report = root / "pipeline_report.json"
+            report.write_text(json.dumps({
+                "output_duration": 340,
+                "debug": {"render": {"segments": [segment(0, 340, 0, 340)]}},
+            }), encoding="utf-8")
+            (root / "job.json").write_text(json.dumps({
+                "id": "short", "status": "DONE", "title": "Short video",
+                "report_path": str(report), "output_path": str(clean),
+            }), encoding="utf-8")
+            with (
+                patch("formatter.planner.probe_video_geometry", return_value=(1920, 1080)),
+                patch("formatter.preview.render_preview", return_value=root / "preview.png"),
+            ):
+                plan = plan_done_job(
+                    root, output_path=root / "format_plan.json",
+                    preview_path=root / "preview.png",
+                )
+        self.assertEqual(plan["part_count"], 1)
+        self.assertEqual(len(plan["parts"]), 1)
+        self.assertEqual(plan["parts"][0]["label"], "")
+        self.assertIsNone(plan["layout"]["part_banner_geometry"])
+        self.assertEqual(plan["clean_video_duration"], 220)
+
+    def test_six_minutes_still_uses_part_flow(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            clean = root / "rendered.mp4"
+            clean.write_bytes(b"clean")
+            report = root / "pipeline_report.json"
+            report.write_text(json.dumps({
+                "output_duration": 360,
+                "debug": {"render": {"segments": [segment(0, 360, 0, 360)]}},
+            }), encoding="utf-8")
+            (root / "job.json").write_text(json.dumps({
+                "id": "boundary", "status": "DONE", "title": "Boundary",
+                "report_path": str(report), "output_path": str(clean),
+            }), encoding="utf-8")
+            with (
+                patch("formatter.planner.probe_video_geometry", return_value=(1920, 1080)),
+                patch("formatter.preview.render_preview", return_value=root / "preview.png"),
+            ):
+                plan = plan_done_job(
+                    root, output_path=root / "format_plan.json",
+                    preview_path=root / "preview.png",
+                )
+        self.assertEqual(plan["part_count"], 3)
+
     def test_trim_policy_uses_one_or_two_minutes_per_side(self):
         self.assertEqual(trim_seconds_for_duration(599), 60)
         self.assertEqual(trim_seconds_for_duration(600), 60)

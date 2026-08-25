@@ -28,6 +28,7 @@ PART_BANNER = {
 }
 TITLE_VIDEO_GAP = 52
 VIDEO_PART_GAP = 52
+SINGLE_OUTPUT_MAX_SECONDS = 360.0
 DURATION_POLICY = {
     "preferred_min": 180.0, "preferred_max": 360.0,
     "soft_overrun_max": 420.0,
@@ -237,35 +238,41 @@ def _banner_geometry(measured_width: int, text_height: int, style: dict[str, int
     }
 
 
-def build_layout(title: dict[str, Any], part_label: str) -> dict[str, Any]:
+def build_layout(title: dict[str, Any], part_label: str | None) -> dict[str, Any]:
     title_banner = _banner_geometry(
         title["measured_width"], len(title["wrapped_lines"]) * title["line_height"],
         TITLE_BANNER, 0,
     )
-    language = title["language"]
-    part_path, part_family, part_variable = _font_for_language(language)
-    part_font = _load_font(part_path, 72, bold_variable=part_variable)
-    part_bbox = part_font.getbbox(part_label)
-    part_width = math.ceil(part_font.getlength(part_label))
-    part_height = part_bbox[3] - part_bbox[1]
-    part_banner = _banner_geometry(
-        part_width, part_height, PART_BANNER, 0,
-    )
-    content_block_height = (
-        title_banner["height"] + TITLE_VIDEO_GAP + VIDEO_PLACEMENT["height"]
-        + VIDEO_PART_GAP + part_banner["height"]
-    )
+    part_path = part_family = None
+    part_variable = False
+    part_bbox = None
+    part_width = part_height = 0
+    part_banner = None
+    if part_label:
+        language = title["language"]
+        part_path, part_family, part_variable = _font_for_language(language)
+        part_font = _load_font(part_path, 72, bold_variable=part_variable)
+        part_bbox = part_font.getbbox(part_label)
+        part_width = math.ceil(part_font.getlength(part_label))
+        part_height = part_bbox[3] - part_bbox[1]
+        part_banner = _banner_geometry(
+            part_width, part_height, PART_BANNER, 0,
+        )
+    content_block_height = title_banner["height"] + TITLE_VIDEO_GAP + VIDEO_PLACEMENT["height"]
+    if part_banner:
+        content_block_height += VIDEO_PART_GAP + part_banner["height"]
     content_block_y = (CANVAS["height"] - content_block_height) // 2
     title_banner["y"] = content_block_y
     video = dict(VIDEO_PLACEMENT)
     video["y"] = title_banner["y"] + title_banner["height"] + TITLE_VIDEO_GAP
-    part_banner["y"] = video["y"] + video["height"] + VIDEO_PART_GAP
+    if part_banner:
+        part_banner["y"] = video["y"] + video["height"] + VIDEO_PART_GAP
     return {
         "canvas": CANVAS,
         "video_placement": video,
         "title_banner_geometry": title_banner,
         "part_banner_geometry": part_banner,
-        "part_label_font": {
+        "part_label_font": ({
             "font_file": f"assets/fonts/{part_path.name}",
             "selected_font": part_family,
             "rendered_size_px": 72,
@@ -273,7 +280,7 @@ def build_layout(title: dict[str, Any], part_label: str) -> dict[str, Any]:
             "bbox_top": part_bbox[1],
             "measured_width": part_width,
             "measured_height": part_height,
-        },
+        } if part_label else None),
         "content_block": {
             "y": content_block_y,
             "height": content_block_height,
@@ -466,9 +473,14 @@ def plan_parts(
     if clean_duration <= 0:
         raise ValueError("clean video duration must be positive")
     part_count = part_count or 3
-    if part_count not in {2, 3}:
-        raise ValueError("formatter part count must be 2 or 3")
+    if part_count not in {1, 2, 3}:
+        raise ValueError("formatter part count must be one, two, or three")
     segments = sorted(render_segments, key=lambda item: item["output_start"])
+    if part_count == 1:
+        return [{
+            "index": 1, "label": "", "clean_start": 0.0,
+            "clean_end": float(clean_duration), "duration": float(clean_duration),
+        }], []
     candidates = _junction_candidates(clean_duration, segments, part_count)
     if speech_intervals:
         candidates.extend(
@@ -577,13 +589,13 @@ def plan_done_job(
         render_segments, trim_start=trim_start, trim_end=trim_end,
     )
     status = formatter_status(clean_duration, format_anyway)
-    part_count = 3
+    part_count = 1 if original_clean_duration < SINGLE_OUTPUT_MAX_SECONDS else 3
     from .title_rewrite import read_title_rewrite
     rewrite = read_title_rewrite(job_dir, str(job["title"]))
     # Use the accepted rewrite for the rendered title banner.  The original
     # title remains in the plan for traceability and fallback behavior.
     title = fit_title(rewrite["rewritten_title"], TITLE_BANNER)
-    part_label_template = PART_LABELS[title["language"]]
+    part_label_template = PART_LABELS[title["language"]] if part_count > 1 else None
     target = Path(output_path).expanduser().resolve()
     speech_intervals = debug.get("union_intervals") or []
     parts, candidates = plan_parts(
@@ -591,9 +603,10 @@ def plan_done_job(
     )
     geometry_source = clean_video if clean_video.is_file() else source_video
     width, height = probe_video_geometry(geometry_source)
-    for part in parts:
-        part["label"] = part_label_template.format(number=part["index"])
-    layout = build_layout(title, parts[0]["label"])
+    if part_count > 1:
+        for part in parts:
+            part["label"] = part_label_template.format(number=part["index"])
+    layout = build_layout(title, parts[0]["label"] or None)
     layout["crop_geometry"] = center_crop_geometry(width, height)
     selected_boundaries = [
         candidate["clean_timestamp"] for candidate in candidates if candidate["selected"]

@@ -67,6 +67,17 @@ class FormatterRendererTests(unittest.TestCase):
         self.assertEqual(len(jobs), 2)
         self.assertEqual([item["path"].name for item in jobs], ["PART_1.mp4", "PART_2.mp4"])
 
+    def test_renderer_creates_one_title_only_output_without_part_suffix(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            plan = make_plan(root, duration=4, part_count=1)
+            plan["parts"][0]["label"] = ""
+            plan["layout"] = build_layout(plan["title"], None)
+            jobs = build_render_jobs(plan, root / "formatted")
+        self.assertEqual(len(jobs), 1)
+        self.assertEqual(jobs[0]["label"], "")
+        self.assertEqual(jobs[0]["path"].name, "output.mp4")
+
     def test_direct_mapping_preserves_keep_and_excludes_intro_silence_outro(self):
         mapping = [
             {"output_start": 0, "output_end": 2, "source_start": 10, "source_end": 12},
