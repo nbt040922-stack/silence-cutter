@@ -7,6 +7,7 @@ $repo = (Resolve-Path (Join-Path $PSScriptRoot "..")).Path
 $exe = Join-Path $repo "desktop\src-tauri\target\release\silence-cutter-desktop.exe"
 $stage = Join-Path $repo "release\SilenceCutter-Desktop-Lightweight"
 $zip = Join-Path $repo "release\SilenceCutter-Desktop-Lightweight.zip"
+$installer = Join-Path $repo "release\SilenceCutter-Desktop-Lightweight-Setup.exe"
 
 if (-not $SkipDesktopBuild) {
     Push-Location (Join-Path $repo "desktop")
@@ -31,7 +32,16 @@ while ($cursor) {
     if ($parent -eq $cursor) { break }
     $cursor = $parent
 }
-if (-not $root) { throw "Khong tim thay thu muc repo Silence Cutter (thu muc production). Hay giai nen goi nay trong repo hoac dat SILENCE_CUTTER_ROOT." }
+if (-not $root) {
+    $known = @(
+        $env:SILENCE_CUTTER_ROOT,
+        "D:\silence-cutter",
+        "C:\silence-cutter",
+        (Join-Path $env:USERPROFILE "silence-cutter")
+    ) | Where-Object { $_ -and (Test-Path (Join-Path $_ "production")) }
+    $root = $known | Select-Object -First 1
+}
+if (-not $root) { throw "Khong tim thay thu muc repo Silence Cutter (thu muc production). Dat SILENCE_CUTTER_ROOT hoac giai nen trong repo." }
 $env:SILENCE_CUTTER_ROOT = $root
 $pythonCandidates = @(
     (Join-Path $root ".venv\Scripts\python.exe"),
@@ -57,8 +67,17 @@ tro den thu muc co thu muc production. Nhan Run-SilenceCutter.cmd de mo.
 
 if (Test-Path -LiteralPath $zip) { Remove-Item -LiteralPath $zip -Force }
 Compress-Archive -Path (Join-Path $stage "*") -DestinationPath $zip -CompressionLevel Optimal
+$compiler = @(
+    (Join-Path $env:LOCALAPPDATA "Programs\Inno Setup 6\ISCC.exe"),
+    (Join-Path ${env:ProgramFiles(x86)} "Inno Setup 6\ISCC.exe")
+) | Where-Object { Test-Path -LiteralPath $_ } | Select-Object -First 1
+if (-not $compiler) { throw "Inno Setup 6 compiler not found" }
+& $compiler (Join-Path $repo "installer\SilenceCutter-Desktop-Lightweight.iss")
+if ($LASTEXITCODE -ne 0) { throw "Lightweight installer build failed with exit code $LASTEXITCODE" }
 $hash = (Get-FileHash -LiteralPath $zip -Algorithm SHA256).Hash
 $size = (Get-Item -LiteralPath $zip).Length
 Write-Host "Desktop lightweight package: $zip"
 Write-Host "Size: $size bytes"
 Write-Host "SHA256: $hash"
+Write-Host "Installer: $installer"
+Write-Host "Installer SHA256: $((Get-FileHash -LiteralPath $installer -Algorithm SHA256).Hash)"
