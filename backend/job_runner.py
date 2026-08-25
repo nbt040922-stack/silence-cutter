@@ -54,7 +54,7 @@ class DownloaderManagerConfig:
 TRANSIENT_BACKOFF = (30.0, 60.0, 120.0)
 HTTP_429_BACKOFF = (60.0, 120.0, 300.0)
 AUTH_FAILURE_CODES = {"HTTP_403", "AUTH_REQUIRED", "BOT_CHALLENGE_OR_TOKEN"}
-SUPPORTED_LOCAL_VIDEO_EXTENSIONS = {".mp4", ".mkv", ".mov", ".webm", ".m4v"}
+SUPPORTED_LOCAL_VIDEO_EXTENSIONS = {".mp4"}
 
 
 def _utf8_environment() -> dict[str, str]:
@@ -487,7 +487,7 @@ def _probe_local_media(path: Path) -> float | None:
         return None
     completed = subprocess.run(
         [
-            ffprobe, "-v", "error", "-show_entries", "format=duration",
+            ffprobe, "-v", "error", "-show_entries", "format=duration,format_name",
             "-of", "json", str(path),
         ],
         capture_output=True, text=True, encoding="utf-8", errors="replace",
@@ -496,10 +496,24 @@ def _probe_local_media(path: Path) -> float | None:
     if completed.returncode:
         return None
     try:
-        duration = float(json.loads(completed.stdout)["format"]["duration"])
+        format_info = json.loads(completed.stdout)["format"]
+        format_names = str(format_info.get("format_name") or "").split(",")
+        if "mp4" not in format_names:
+            return None
+        duration = float(format_info["duration"])
     except (KeyError, TypeError, ValueError, json.JSONDecodeError):
         return None
     return duration if duration > 0 else None
+
+
+def _is_local_mp4_candidate(path: Path) -> bool:
+    """Accept only final MP4 names, never yt-dlp fragments or temp files."""
+    if path.suffix.lower() != ".mp4":
+        return False
+    name = path.name.casefold()
+    if any(marker in name for marker in (".part.", ".ytdl.", ".tmp.", ".download.", ".fragment.")):
+        return False
+    return re.search(r"\.f\d+(?:-[a-z0-9]+)?\.mp4$", name) is None
 
 
 def _local_job_status(job: dict[str, Any]) -> str:
@@ -592,12 +606,7 @@ def scan_local_folder(
     created_count = 0
     updated_observations: dict[str, Any] = {}
     for source in sorted(folder.iterdir(), key=lambda item: item.name.casefold()):
-        if (
-            not source.is_file()
-            or source.name.startswith(".")
-            or source.name.lower().endswith((".part", ".ytdl", ".tmp"))
-            or source.suffix.lower() not in SUPPORTED_LOCAL_VIDEO_EXTENSIONS
-        ):
+        if not source.is_file() or not _is_local_mp4_candidate(source):
             continue
         try:
             stat = source.stat()
