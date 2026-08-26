@@ -74,15 +74,39 @@ class FormatterTests(unittest.TestCase):
         self.assertIsNone(plan["layout"]["part_banner_geometry"])
         self.assertEqual(plan["clean_video_duration"], 220)
 
-    def test_six_minutes_still_uses_part_flow(self):
+    def test_six_minutes_uses_two_part_flow(self):
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
             clean = root / "rendered.mp4"
             clean.write_bytes(b"clean")
             report = root / "pipeline_report.json"
             report.write_text(json.dumps({
-                "output_duration": 360,
+                "output_duration": 540,
                 "debug": {"render": {"segments": [segment(0, 360, 0, 360)]}},
+            }), encoding="utf-8")
+            (root / "job.json").write_text(json.dumps({
+                "id": "boundary", "status": "DONE", "title": "Boundary",
+                "report_path": str(report), "output_path": str(clean),
+            }), encoding="utf-8")
+            with (
+                patch("formatter.planner.probe_video_geometry", return_value=(1920, 1080)),
+                patch("formatter.preview.render_preview", return_value=root / "preview.png"),
+            ):
+                plan = plan_done_job(
+                    root, output_path=root / "format_plan.json",
+                    preview_path=root / "preview.png",
+                )
+        self.assertEqual(plan["part_count"], 2)
+
+    def test_ten_minutes_uses_three_part_flow(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            clean = root / "rendered.mp4"
+            clean.write_bytes(b"clean")
+            report = root / "pipeline_report.json"
+            report.write_text(json.dumps({
+                "output_duration": 600,
+                "debug": {"render": {"segments": [segment(0, 600, 0, 600)]}},
             }), encoding="utf-8")
             (root / "job.json").write_text(json.dumps({
                 "id": "boundary", "status": "DONE", "title": "Boundary",
@@ -151,11 +175,11 @@ class FormatterTests(unittest.TestCase):
                     root, output_path=root / "format_plan.json",
                     preview_path=root / "part1_preview.png",
                 )
-        self.assertEqual(plan["part_count"], 3)
+        self.assertEqual(plan["part_count"], 2)
         self.assertEqual(plan["trim_start_seconds"], 60)
         self.assertEqual(plan["trim_end_seconds"], 60)
         self.assertEqual(plan["clean_video_duration"], 420)
-        self.assertEqual([part["label"] for part in plan["parts"]], ["パート1", "パート2", "パート3"])
+        self.assertEqual([part["label"] for part in plan["parts"]], ["パート1", "パート2"])
 
     def test_analysis_only_job_plans_directly_from_source_keep_mapping(self):
         with tempfile.TemporaryDirectory() as directory:

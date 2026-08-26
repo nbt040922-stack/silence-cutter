@@ -589,7 +589,12 @@ def plan_done_job(
         render_segments, trim_start=trim_start, trim_end=trim_end,
     )
     status = formatter_status(clean_duration, format_anyway)
-    part_count = 1 if original_clean_duration < SINGLE_OUTPUT_MAX_SECONDS else 3
+    if original_clean_duration < SINGLE_OUTPUT_MAX_SECONDS:
+        part_count = 1
+    elif original_clean_duration < 600.0:
+        part_count = 2
+    else:
+        part_count = 3
     from .title_rewrite import read_title_rewrite
     rewrite = read_title_rewrite(job_dir, str(job["title"]))
     # Use the accepted rewrite for the rendered title banner.  The original
